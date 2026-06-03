@@ -926,7 +926,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
 
           <div className="choice-row">
             <button type="button" className={`choice-chip ${healthType === "file" ? "selected" : ""}`} onClick={() => setHealthType("file")}>
-              <Folder /> File exists after restore
+              <Folder /> File or folder exists after restore
             </button>
             <button type="button" className={`choice-chip ${healthType === "http" ? "selected" : ""}`} onClick={() => setHealthType("http")}>
               <Server /> HTTP endpoint responds
@@ -934,8 +934,8 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
           </div>
 
           <WizardField
-            label={healthType === "file" ? "File to check" : "URL to check"}
-            hint={healthType === "file" ? "Path that must exist after a restore test" : "Must return HTTP 200 after restore"}
+            label={healthType === "file" ? "File or folder to check" : "URL to check"}
+            hint={healthType === "file" ? "Path that must exist in the restore sandbox (folders like /var/www are OK)" : "Must return HTTP 200 after restore"}
             full
           >
             <input

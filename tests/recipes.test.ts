@@ -43,6 +43,22 @@ describe("recipe helpers", () => {
     ]);
   });
 
+  it("passes restore proof when a restored folder exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "frd-proof-dir-"));
+    const restoredDir = path.join(root, "var", "www");
+    await fs.mkdir(restoredDir, { recursive: true });
+    await fs.writeFile(path.join(restoredDir, "index.html"), "<html></html>");
+
+    const result = await runHealthCheck(
+      { id: "check-dir", type: "file", target: "/var/www" },
+      root,
+      () => undefined
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.message).toBe("Restored folder check passed");
+  });
+
   it("passes v9 native restore proof when a restored file exists and contains expected text", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "frd-proof-"));
     const restoredFile = path.join(root, "srv", "app", "config.yml");

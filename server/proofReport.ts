@@ -1,26 +1,18 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
+import { digestPath, restoredTargetPath } from "./recipes";
 import type { App, ChecksumResult, RestoreProof } from "../shared/types";
-
-async function sha256File(filePath: string) {
-  const data = await fs.readFile(filePath);
-  return crypto.createHash("sha256").update(data).digest("hex");
-}
 
 export async function runChecksumProof(app: App, restoreDir: string, onLine: (line: string) => void): Promise<ChecksumResult[]> {
   const paths = app.proofPaths?.length ? app.proofPaths : app.backupPaths.slice(0, 3);
   const results: ChecksumResult[] = [];
 
   for (const target of paths) {
-    const sourcePath = path.resolve(target);
-    const root = path.parse(sourcePath).root;
-    const relative = path.relative(root, sourcePath);
-    const restoredPath = path.join(restoreDir, relative);
+    const restoredPath = restoredTargetPath(restoreDir, target);
 
     try {
-      const [sourceHash, restoredHash] = await Promise.all([sha256File(sourcePath), sha256File(restoredPath)]);
+      const [sourceHash, restoredHash] = await Promise.all([digestPath(path.resolve(target)), digestPath(restoredPath)]);
       const passed = sourceHash === restoredHash;
       onLine(`Checksum ${passed ? "passed" : "failed"} for ${target}`);
       results.push({ path: target, passed, message: passed ? "SHA-256 match" : "SHA-256 mismatch" });

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { decryptSecret } from "./crypto";
@@ -80,16 +81,57 @@ function restoredTargetPath(restoreDir: string, target: string) {
   return path.join(restoreDir, relative);
 }
 
+export { restoredTargetPath };
+
+export async function digestPath(target: string) {
+  const stat = await fs.stat(target);
+  if (stat.isFile()) {
+    const data = await fs.readFile(target);
+    return crypto.createHash("sha256").update(data).digest("hex");
+  }
+  if (!stat.isDirectory()) throw new Error("Path is not a file or folder");
+
+  const hash = crypto.createHash("sha256");
+  async function walk(current: string, prefix = "") {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const rel = prefix ? path.join(prefix, entry.name) : entry.name;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        hash.update(`d:${rel}\n`);
+        await walk(full, rel);
+      } else if (entry.isFile()) {
+        const data = await fs.readFile(full);
+        hash.update(`f:${rel}:${data.length}:${crypto.createHash("sha256").update(data).digest("hex")}\n`);
+      }
+    }
+  }
+  await walk(target);
+  return hash.digest("hex");
+}
+
 export async function runHealthCheck(check: HealthCheck, restoreDir: string, onLine: (line: string) => void) {
   if (check.type === "file") {
     const target = restoredTargetPath(restoreDir, check.target);
     try {
       const stat = await fs.stat(target);
-      const contentOk = check.expected ? (await fs.readFile(target, "utf8")).includes(check.expected) : true;
-      const passed = stat.isFile() && contentOk;
-      return { checkId: check.id, passed, message: passed ? "Restored file check passed" : "Restored file content did not match" };
+      if (check.expected) {
+        if (!stat.isFile()) {
+          return { checkId: check.id, passed: false, message: "Expected text checks require a file path, not a folder" };
+        }
+        const passed = (await fs.readFile(target, "utf8")).includes(check.expected);
+        return { checkId: check.id, passed, message: passed ? "Restored file check passed" : "Restored file content did not match" };
+      }
+      const passed = stat.isFile() || stat.isDirectory();
+      return {
+        checkId: check.id,
+        passed,
+        message: passed
+          ? stat.isDirectory() ? "Restored folder check passed" : "Restored file check passed"
+          : "Restored path is not a file or folder"
+      };
     } catch {
-      return { checkId: check.id, passed: false, message: `Restored file was not found: ${check.target}` };
+      return { checkId: check.id, passed: false, message: `Restored path was not found: ${check.target}` };
     }
   }
 
