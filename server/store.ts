@@ -232,6 +232,18 @@ export class Store {
     return alert;
   }
 
+  async acknowledgeActiveAlertsByTitle(appId: string, titles: string[]) {
+    if (titles.length === 0) return;
+    let changed = false;
+    for (const alert of this.state.alerts) {
+      if (alert.appId === appId && !alert.acknowledgedAt && titles.includes(alert.title)) {
+        alert.acknowledgedAt = now();
+        changed = true;
+      }
+    }
+    if (changed) await this.save();
+  }
+
   async removeApp(id: string) {
     const app = this.state.apps.find((item) => item.id === id);
     if (!app) throw new Error(`App ${id} not found`);

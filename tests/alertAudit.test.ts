@@ -49,5 +49,18 @@ describe("alert audit", () => {
         })
       ])
     );
+
+    await store.addRestoreProof({
+      appId: app.id,
+      snapshotId: "snap-1",
+      testedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      status: "passed",
+      healthResults: []
+    });
+
+    await auditAlerts(store);
+
+    expect(store.snapshot().alerts.find((alert) => alert.title === "Restore proof missing" && !alert.acknowledgedAt)).toBeUndefined();
   });
 });

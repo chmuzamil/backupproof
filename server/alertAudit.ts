@@ -23,7 +23,9 @@ export async function auditAlerts(store: Store) {
   const state = store.snapshot();
 
   for (const app of state.apps) {
+    const resolvedTitles: string[] = [];
     const repository = state.repositories.find((item) => item.id === app.repositoryId);
+
     if (!repository) {
       const result = await store.addAlertIfMissing({
         appId: app.id,
@@ -35,12 +37,16 @@ export async function auditAlerts(store: Store) {
       continue;
     }
 
+    resolvedTitles.push("Repository missing");
+
+    let repositoryHealthy = false;
     try {
       const adapter = getEngineAdapter(repository.engine);
       await adapter.check(repository, () => undefined, {
         passwordSecret: store.getSecret(repository.passwordSecretId),
         credentialSecret: store.getSecret(repository.credentialSecretId)
       });
+      repositoryHealthy = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Repository unreachable";
       const result = await store.addAlertIfMissing({
@@ -50,6 +56,10 @@ export async function auditAlerts(store: Store) {
         message: `${app.name}: ${message}`
       });
       if (result.created) await deliver(store, result.alert);
+    }
+
+    if (repositoryHealthy) {
+      resolvedTitles.push("Repository unreachable");
     }
 
     const snapshots = await getEngineAdapter(repository.engine).listSnapshots(app, repository, {
@@ -66,7 +76,8 @@ export async function auditAlerts(store: Store) {
         message: `${app.name} has backups, but none have passed a restore test yet.`
       });
       if (result.created) await deliver(store, result.alert);
-      continue;
+    } else if (proof) {
+      resolvedTitles.push("Restore proof missing");
     }
 
     if (proof?.status === "failed") {
@@ -77,6 +88,8 @@ export async function auditAlerts(store: Store) {
         message: `${app.name} restored snapshot ${proof.snapshotId}, but at least one proof check failed.`
       });
       if (result.created) await deliver(store, result.alert);
+    } else if (proof) {
+      resolvedTitles.push("Restore proof failed");
     }
 
     if (proof?.status === "passed") {
@@ -89,15 +102,24 @@ export async function auditAlerts(store: Store) {
           message: `${app.name} needs a fresh restore test. Last proof expired ${proof.expiresAt}.`
         });
         if (result.created) await deliver(store, result.alert);
-      } else if (expiresIn < 24 * 60 * 60 * 1000) {
-        const result = await store.addAlertIfMissing({
-          appId: app.id,
-          severity: "info",
-          title: "Restore proof expiring soon",
-          message: `${app.name} proof expires within 24 hours.`
-        });
-        if (result.created) await deliver(store, result.alert);
+      } else {
+        resolvedTitles.push("Restore proof stale");
+        if (expiresIn < 24 * 60 * 60 * 1000) {
+          const result = await store.addAlertIfMissing({
+            appId: app.id,
+            severity: "info",
+            title: "Restore proof expiring soon",
+            message: `${app.name} proof expires within 24 hours.`
+          });
+          if (result.created) await deliver(store, result.alert);
+        } else {
+          resolvedTitles.push("Restore proof expiring soon");
+        }
       }
+    } else if (proof) {
+      resolvedTitles.push("Restore proof stale", "Restore proof expiring soon");
     }
+
+    await store.acknowledgeActiveAlertsByTitle(app.id, resolvedTitles);
   }
 }
