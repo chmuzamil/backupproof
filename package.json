@@ -1,0 +1,57 @@
+{
+  "name": "friendly-restore-dashboard",
+  "version": "4.1.0",
+  "description": "BackupProof — Every backup earns its trust. Self-hosted verified backups with automatic restore proof.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "frd": "./cli/frd.ts"
+  },
+  "scripts": {
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch server/index.ts",
+    "dev:web": "vite --host 0.0.0.0",
+    "build": "tsc -p tsconfig.json && vite build",
+    "start": "node dist/server/index.js",
+    "cli": "tsx cli/frd.ts",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "package:win": "powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
+    "package:linux": "bash scripts/package-linux.sh"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1061.0",
+    "@aws-sdk/lib-storage": "^3.1061.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.10",
+    "ssh2-sftp-client": "^12.1.1",
+    "tar": "^7.5.16",
+    "uuid": "^11.0.3",
+    "vite": "^6.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.1",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.16",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "@types/ssh2-sftp-client": "^9.0.6",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.1",
+    "@typescript-eslint/parser": "^8.18.1",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.17.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

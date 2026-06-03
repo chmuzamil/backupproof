@@ -1,0 +1,316 @@
+# BackupProof
+
+> **Every backup earns its trust.**
+
+**BackupProof** is an open-source, self-hosted backup verification platform that automatically restores, tests, and proves recovery works.
+
+Most backup solutions only tell you a backup completed successfully. BackupProof goes one step further by continuously verifying that your backups can actually be restored when disaster strikes.
+
+## Why BackupProof?
+
+A successful backup does not guarantee a successful recovery.
+
+Corrupted archives, missing files, broken databases, invalid credentials, and infrastructure changes can make backups useless when they are needed most.
+
+BackupProof eliminates uncertainty by automatically:
+
+* Creating encrypted backups
+* Restoring backups into a verification environment
+* Running recovery tests
+* Validating checksums and integrity
+* Generating restore proof reports
+* Tracking recovery confidence over time
+
+**Don't trust backups. Prove them.**
+
+---
+
+## Features
+
+### Backup Verification
+
+* Automatic restore testing
+* Recovery proof reports
+* Health checks after restore
+* SHA-256 integrity verification
+* Confidence score for every protected application
+
+### Built-in Backup Engine
+
+No external binaries required.
+
+* Incremental backups
+* Chunk-based storage
+* AES-256-GCM encryption
+* Deduplication through manifest tracking
+* Repository integrity verification
+
+### Storage Backends
+
+* Local filesystem
+* SFTP
+* Amazon S3
+* Backblaze B2
+
+### Infrastructure Awareness
+
+Automatic discovery of:
+
+* Docker containers
+* Docker Compose projects
+* PostgreSQL databases
+* MySQL / MariaDB databases
+* Common application data directories
+
+### Recovery Workflows
+
+* One-click restore testing
+* Disaster recovery reports
+* Recovery history tracking
+* Restore verification badges
+
+### Operations
+
+* Scheduler
+* Alerts & notifications
+* Audit logs
+* Role-based access control
+* Multi-destination backups
+
+---
+
+## How It Works
+
+```text
+Protect Data
+     ↓
+Create Backup
+     ↓
+Store Securely
+     ↓
+Automatic Restore Test
+     ↓
+Health Checks
+     ↓
+Integrity Verification
+     ↓
+Restore Proof Report
+     ↓
+Confidence Score
+```
+
+---
+
+## Quick Start
+
+### Development
+
+```bash
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+### Production
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+---
+
+## Protect Data
+
+BackupProof uses a simple guided workflow.
+
+### Step 1 — Select Data
+
+Protect:
+
+* Files and folders
+* Docker Compose applications
+* PostgreSQL databases
+* MySQL / MariaDB databases
+
+Choose:
+
+* Scan this machine
+* Enter paths manually
+
+### Step 2 — Choose Storage
+
+Available destinations:
+
+* Local storage
+* SFTP
+* S3
+* Backblaze B2
+
+### Step 3 — Define Restore Proof
+
+Verify backups by:
+
+* Checking file existence
+* Verifying checksums
+* Testing HTTP endpoints
+* Running custom health checks
+
+### Step 4 — Enable Protection
+
+BackupProof begins:
+
+* Backing up
+* Restoring
+* Testing
+* Verifying
+
+Automatically.
+
+---
+
+## Built-in Backup Engine
+
+BackupProof ships with its own backup engine.
+
+| Capability           | Support       |
+| -------------------- | ------------- |
+| Incremental backups  | ✅             |
+| Encryption           | ✅ AES-256-GCM |
+| Deduplication        | ✅             |
+| Restore verification | ✅             |
+| Integrity checks     | ✅             |
+| Local storage        | ✅             |
+| SFTP                 | ✅             |
+| S3                   | ✅             |
+| B2                   | ✅             |
+
+No Restic, Kopia, or external tools required.
+
+---
+
+## Optional External Engines
+
+BackupProof can also integrate with:
+
+* Restic
+* Kopia
+
+When installed, repositories can be imported and managed through the BackupProof dashboard.
+
+---
+
+## CLI
+
+```bash
+npm run cli -- status
+
+npm run cli -- backup run <appId>
+
+npm run cli -- proof run <appId>
+
+npm run cli -- restore <appId> --snapshot <id>
+```
+
+---
+
+## Example Use Cases
+
+### Homelab
+
+Verify that Docker applications can actually be restored after hardware failure.
+
+### SaaS Applications
+
+Automatically test PostgreSQL restores and application health checks.
+
+### Small Business
+
+Protect critical files and continuously verify recovery readiness.
+
+### Managed Service Providers
+
+Monitor backup confidence across multiple customer environments.
+
+---
+
+## Architecture
+
+```text
+React Dashboard
+        │
+        ▼
+BackupProof Orchestrator
+        │
+        ▼
+Backup Engine
+(FRD / Restic / Kopia)
+        │
+        ▼
+Storage Providers
+(Local / SFTP / S3 / B2)
+```
+
+---
+
+## Roadmap
+
+### v1
+
+* Backup verification
+* Restore proof reports
+* Confidence scoring
+* Docker support
+* PostgreSQL support
+* MySQL support
+
+### v2
+
+* Agent-based backups
+* Kubernetes support
+* Immutable storage
+* Recovery simulations
+* Advanced compliance reporting
+
+### v3
+
+* Multi-node deployments
+* Enterprise SSO
+* Team collaboration
+* Recovery analytics
+
+---
+
+## Security
+
+* AES-256-GCM encryption
+* Repository passphrases
+* Integrity verification
+* Audit logs
+* RBAC support
+
+---
+
+## Contributing
+
+Contributions, bug reports, feature requests, and feedback are welcome.
+
+Please open an issue or submit a pull request.
+
+---
+
+## License
+
+MIT License
+
+---
+
+**BackupProof**
+
+*Every backup earns its trust.*

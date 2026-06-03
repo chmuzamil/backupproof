@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="BackupProof">
+  <rect width="64" height="64" rx="14" fill="#17211b"/>
+  <path d="M32 12 44 18v14c0 9.5-6.8 18.4-12 20-5.2-1.6-12-10.5-12-20V18L32 12z" fill="#74d680"/>
+  <path d="M26 32.5 30.5 37 38 27.5" fill="none" stroke="#17211b" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

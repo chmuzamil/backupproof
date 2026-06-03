@@ -1,0 +1,16 @@
+services:
+  backupproof:
+    container_name: backupproof
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      FRD_DATA_DIR: /data
+      FRD_ENCRYPTION_KEY: change-me-to-a-32-byte-secret-value
+      FRD_MAX_CONCURRENT_JOBS: "3"
+    volumes:
+      - frd-data:/data
+      - /:/host:ro
+
+volumes:
+  frd-data:
