@@ -77,6 +77,38 @@ function bytes(value?: number) {
   return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+const FLASH_DURATION_MS = 4500;
+
+function useFlashMessage(durationMs = FLASH_DURATION_MS) {
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), durationMs);
+    return () => window.clearTimeout(timer);
+  }, [message, durationMs]);
+  return [message, setMessage] as const;
+}
+
+function FlashBanner({
+  message,
+  onDismiss,
+  variant = "info"
+}: {
+  message: string;
+  onDismiss: () => void;
+  variant?: "info" | "danger" | "warning";
+}) {
+  if (!message) return null;
+  return (
+    <div className={`banner flash ${variant}`} role="status">
+      <span className="flash-text">{message}</span>
+      <button type="button" className="flash-dismiss" onClick={onDismiss} aria-label="Dismiss">
+        <XCircle size={16} />
+      </button>
+    </div>
+  );
+}
+
 function BrandWordmark({ compact }: { compact?: boolean }) {
   return (
     <strong className={compact ? "brand-wordmark compact" : "brand-wordmark"}>
@@ -199,7 +231,7 @@ function EnvironmentPills({ state }: { state: DashboardState }) {
 
 function Dashboard({ summaries, jobs, refresh }: { summaries: AppSummary[]; jobs: Job[]; refresh: () => Promise<void> }) {
   const [demoRunning, setDemoRunning] = useState(false);
-  const [demoMessage, setDemoMessage] = useState("");
+  const [demoMessage, setDemoMessage] = useFlashMessage();
 
   async function runDemo() {
     setDemoRunning(true);
@@ -225,7 +257,7 @@ function Dashboard({ summaries, jobs, refresh }: { summaries: AppSummary[]; jobs
           </div>
           <button onClick={runDemo} disabled={demoRunning}><Sparkles /> {demoRunning ? "Starting..." : "Run demo"}</button>
         </div>
-        {demoMessage && <div className="banner info">{demoMessage}</div>}
+        <FlashBanner message={demoMessage} onDismiss={() => setDemoMessage("")} />
         <div className="section-title">
           <h2>Protected Apps</h2>
           <span>{summaries.length} app{summaries.length === 1 ? "" : "s"}</span>
@@ -254,7 +286,7 @@ function EmptyState() {
 }
 
 function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Promise<void> }) {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
 
   async function run(type: JobType) {
     await api.post(`/api/apps/${summary.app.id}/jobs/${type}`);
@@ -317,13 +349,13 @@ function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Pro
         <button type="button" className="danger" onClick={deleteSnapshots}><Trash2 /> Delete snapshots</button>
         <button type="button" className="danger" onClick={removeApp}><Trash2 /> Remove app</button>
       </div>
-      {message && <div className="banner info">{message}</div>}
+      <FlashBanner message={message} onDismiss={() => setMessage("")} />
     </article>
   );
 }
 
 function JobPanel({ jobs, refresh }: { jobs: Job[]; refresh: () => Promise<void> }) {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
 
   async function clearLogs() {
     if (!window.confirm("Clear completed job logs from the stream? Running jobs will stay.")) return;
@@ -343,7 +375,7 @@ function JobPanel({ jobs, refresh }: { jobs: Job[]; refresh: () => Promise<void>
         <h2>Job Stream</h2>
         <button type="button" className="ghost-button" onClick={clearLogs}><Trash2 /> Clear logs</button>
       </div>
-      {message && <div className="banner info">{message}</div>}
+      <FlashBanner message={message} onDismiss={() => setMessage("")} />
       {jobs.length === 0 ? (
         <p className="muted">No jobs yet.</p>
       ) : jobs.map((job) => (
@@ -384,7 +416,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [pathMode, setPathMode] = useState<"scan" | "manual">("scan");
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
@@ -651,7 +683,11 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
         ))}
       </div>
 
-      {message && <div className={`banner ${message.startsWith("Success") ? "info" : "danger"}`}>{message}</div>}
+      <FlashBanner
+        message={message}
+        onDismiss={() => setMessage("")}
+        variant={message.startsWith("Success") ? "info" : "danger"}
+      />
 
       {step === 0 && (
         <div className="wizard-panel">
@@ -1066,7 +1102,7 @@ function Recovery({ summaries }: { summaries: AppSummary[] }) {
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState("");
   const [targetDir, setTargetDir] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
   const [drScenario, setDrScenario] = useState("lost-server");
   const selectedApp = summaries.find((summary) => summary.app.id === selectedAppId) ?? summaries[0];
 
@@ -1156,7 +1192,7 @@ function Recovery({ summaries }: { summaries: AppSummary[] }) {
           <button className="primary" onClick={restoreSelected} disabled={!selectedSnapshotId}><ArchiveRestore /> Restore snapshot</button>
           <button onClick={runDr} disabled={!selectedSnapshotId}><LifeBuoy /> Run DR wizard</button>
         </div>
-        {message && <div className="banner info">{message}</div>}
+        <FlashBanner message={message} onDismiss={() => setMessage("")} />
         <div className="snapshot-list">
           {snapshots.length === 0 ? (
             <div className="empty compact-empty">
@@ -1199,7 +1235,7 @@ function cadenceToCron(cadence: string, fallback: string) {
 function Schedule({ state, summaries, refresh }: { state: DashboardState; summaries: AppSummary[]; refresh: () => Promise<void> }) {
   const [policyId, setPolicyId] = useState(state.policies[0]?.id ?? "");
   const policy = state.policies.find((item) => item.id === policyId) ?? state.policies[0];
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
 
   async function save(form: FormData) {
     if (!policy) return;
@@ -1258,7 +1294,7 @@ function Schedule({ state, summaries, refresh }: { state: DashboardState; summar
           <input name="keepMonthly" type="number" min="0" defaultValue={policy.retention.keepMonthly} placeholder="Monthly snapshots to keep" required />
         </WizardSection>
         <button className="primary"><CalendarClock /> Save schedule</button>
-        {message && <div className="banner info">{message}</div>}
+        <FlashBanner message={message} onDismiss={() => setMessage("")} />
       </form>
       <aside className="schedule-side">
         <h2>Using This Policy</h2>
@@ -1338,8 +1374,8 @@ function Alerts({ state, summaries, refresh }: { state: DashboardState; summarie
 }
 
 function Notifications({ state, refresh }: { state: DashboardState; refresh: () => Promise<void> }) {
-  const [message, setMessage] = useState("");
-  const [migrateMessage, setMigrateMessage] = useState("");
+  const [message, setMessage] = useFlashMessage();
+  const [migrateMessage, setMigrateMessage] = useFlashMessage();
   const resticOk = state.environment.resticAvailable ?? false;
   const kopiaOk = state.environment.kopiaAvailable ?? false;
 
@@ -1418,7 +1454,7 @@ function Notifications({ state, refresh }: { state: DashboardState; refresh: () 
           <input name="pass" type="password" placeholder="SMTP password" />
         </WizardSection>
         <button className="primary"><Bell /> Save alerts</button>
-        {message && <div className="banner">{message}</div>}
+        <FlashBanner message={message} onDismiss={() => setMessage("")} />
       </form>
       <aside className="schedule-side">
         <h2>External Engines</h2>
@@ -1477,7 +1513,7 @@ function Notifications({ state, refresh }: { state: DashboardState; refresh: () 
                 <button type="submit">Import Kopia repo</button>
               </form>
             )}
-            {migrateMessage && <div className="banner info">{migrateMessage}</div>}
+            <FlashBanner message={migrateMessage} onDismiss={() => setMigrateMessage("")} />
           </>
         )}
 

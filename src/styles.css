@@ -947,6 +947,35 @@ textarea {
   color: #84311f;
 }
 
+.banner.flash {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  margin-bottom: 0;
+  font-weight: 600;
+}
+
+.flash-text {
+  flex: 1;
+}
+
+.flash-dismiss {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.flash-dismiss:hover {
+  opacity: 1;
+}
+
 .recovery-steps {
   display: grid;
   gap: 10px;
