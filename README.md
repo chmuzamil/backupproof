@@ -1,5 +1,7 @@
 # BackupProof
 
+![BackupProof — Every backup earns its trust](banner.png)
+
 > **Every backup earns its trust.**
 
 **BackupProof** is an open-source, self-hosted backup verification platform that automatically restores, tests, and proves recovery works.

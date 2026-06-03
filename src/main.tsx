@@ -80,8 +80,23 @@ function bytes(value?: number) {
 function BrandWordmark({ compact }: { compact?: boolean }) {
   return (
     <strong className={compact ? "brand-wordmark compact" : "brand-wordmark"}>
-      <span>Backup</span><span className="accent">Proof</span>
+      <span className="brand-backup">Backup</span><span className="accent">Proof</span>
     </strong>
+  );
+}
+
+function SidebarBrand() {
+  return (
+    <div className="brand">
+      <img className="brand-logo" src="/logo-mark.svg" width={46} height={46} alt="" />
+      <div className="brand-copy">
+        <BrandWordmark compact />
+        <p className="brand-tagline">
+          <span>Every backup</span>{" "}
+          <span className="accent">earns its trust.</span>
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -112,21 +127,18 @@ function App() {
   const latestJobs = useMemo(() => state?.jobs.slice(0, 8) ?? [], [state]);
 
   if (!state) {
-    return <div className="loading">{brand.loadingMessage}</div>;
+    return (
+      <div className="loading">
+        <img className="loading-logo" src="/logo-mark.svg" width={56} height={56} alt="" />
+        <span>{brand.loadingMessage}</span>
+      </div>
+    );
   }
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark" aria-hidden="true">
-            <ShieldCheck />
-          </div>
-          <div>
-            <BrandWordmark compact />
-            <span className="brand-tagline">{brand.tagline}</span>
-          </div>
-        </div>
+        <SidebarBrand />
         <button className={active === "dashboard" ? "nav active" : "nav"} onClick={() => setActive("dashboard")}><HardDrive /> Dashboard</button>
         <button className={active === "protect" ? "nav active" : "nav"} onClick={() => setActive("protect")}><ShieldCheck /> Protect data</button>
         <button className={active === "recovery" ? "nav active" : "nav"} onClick={() => setActive("recovery")}><LifeBuoy /> Recovery</button>
