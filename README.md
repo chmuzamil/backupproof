@@ -105,6 +105,60 @@ Confidence Score
 
 ## Quick Start
 
+### Docker (recommended)
+
+The fastest way to run BackupProof in production is with Docker Compose. The container listens on port **8787** and mounts the host filesystem read-only at `/host` so you can back up paths like `/host/var/www`.
+
+```bash
+git clone https://github.com/chmuzamil/backupproof.git
+cd backupproof
+```
+
+Edit `docker-compose.yml` and set a strong **`FRD_ENCRYPTION_KEY`** (at least 32 characters). This key encrypts stored credentials and must stay the same across restarts.
+
+```bash
+docker compose up -d --build
+```
+
+Open:
+
+```text
+http://localhost:8787
+```
+
+**Useful commands:**
+
+```bash
+docker compose logs -f          # follow logs
+docker compose pull && docker compose up -d --build   # update
+docker compose down             # stop
+```
+
+**Volumes**
+
+| Mount | Purpose |
+| ----- | ------- |
+| `frd-data` → `/data` | BackupProof state, vault metadata, job history |
+| `/` → `/host:ro` | Read-only access to host files for backup and discovery |
+
+When protecting data on the host machine, prefix paths with `/host` (for example `/host/var/www` or `/host/home/user/photos`).
+
+**Environment variables**
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `FRD_DATA_DIR` | `/data` | Persistent data directory inside the container |
+| `FRD_ENCRYPTION_KEY` | *(required)* | Secret used to encrypt stored credentials |
+| `FRD_MAX_CONCURRENT_JOBS` | `3` | Maximum parallel backup/restore jobs |
+| `PORT` | `8787` | HTTP port (also set in `ports` mapping) |
+
+Optional: mount the Docker socket if you want container discovery from inside BackupProof:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
 ### Development
 
 ```bash
@@ -118,13 +172,21 @@ Open:
 http://localhost:5173
 ```
 
-### Production
+### Production (without Docker)
 
 ```bash
 npm install
 npm run build
 npm start
 ```
+
+Open:
+
+```text
+http://localhost:8787
+```
+
+Set `FRD_DATA_DIR` and `FRD_ENCRYPTION_KEY` in the environment for persistent, encrypted storage.
 
 ---
 
