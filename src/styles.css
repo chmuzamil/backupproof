@@ -99,14 +99,15 @@ button {
   font-size: 22px;
   line-height: 1.05;
   letter-spacing: -0.03em;
+  white-space: nowrap;
 }
 
 .brand-wordmark.compact {
-  font-size: 19px;
+  font-size: 17px;
 }
 
-.brand-wordmark .brand-backup,
-.brand-wordmark span:first-child:not(.accent) {
+.sidebar .brand-wordmark .brand-backup,
+.sidebar .brand-wordmark span:first-child:not(.accent) {
   color: #f3f7f4;
 }
 
@@ -129,12 +130,6 @@ button {
 
 .brand svg {
   color: #74d680;
-}
-
-.brand span {
-  display: block;
-  color: #b9c8be;
-  font-size: 13px;
 }
 
 .nav {
@@ -188,6 +183,11 @@ h1 {
 .topbar .brand-wordmark {
   font-size: 32px;
   margin-bottom: 0;
+}
+
+.topbar .brand-wordmark .brand-backup,
+.topbar .brand-wordmark span:first-child:not(.accent) {
+  color: #17211b;
 }
 
 .topbar-tagline {
