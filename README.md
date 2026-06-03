@@ -299,18 +299,14 @@ Storage Providers
 
 ## Contributing
 
-Contributions, bug reports, feature requests, and feedback are welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, guidelines, and pull request expectations.
 
-Please open an issue or submit a pull request.
+Bug reports, feature ideas, and pull requests are welcome on [GitHub Issues](https://github.com/chmuzamil/backupproof/issues).
 
 ---
 
 ## License
 
-MIT License
+This project is licensed under the [MIT License](LICENSE).
 
----
-
-**BackupProof**
-
-*Every backup earns its trust.*
+Copyright (c) 2026 [chmuzamil](https://github.com/chmuzamil)
