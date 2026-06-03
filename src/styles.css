@@ -389,6 +389,45 @@ button svg,
   background: #53615a;
 }
 
+.danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e5ebe5;
+}
+
+.danger-actions .danger,
+button.danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff1ee;
+  color: #923018;
+  border: 1px solid #efb9ad;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-weight: 800;
+}
+
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f4f7f3;
+  color: #17211b;
+  border: 1px solid #cfdacf;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.job-panel .section-title h2 {
+  margin: 0;
+}
+
 .snapshot-line {
   color: #647069;
   font-size: 12px;

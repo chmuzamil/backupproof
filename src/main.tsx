@@ -13,7 +13,6 @@ import {
   Folder,
   FolderSearch,
   HardDrive,
-  History,
   LifeBuoy,
   Play,
   Scissors,
@@ -21,6 +20,7 @@ import {
   Server,
   ShieldCheck,
   Sparkles,
+  Trash2,
   XCircle
 } from "lucide-react";
 import type { Alert, AppSummary, DashboardState, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, Job, JobType, Policy } from "../shared/types";
@@ -56,6 +56,11 @@ const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body)
     });
+    if (!res.ok) throw new Error((await res.json()).error ?? "Request failed");
+    return res.json();
+  },
+  async delete(path: string) {
+    const res = await fetch(path, { method: "DELETE" });
     if (!res.ok) throw new Error((await res.json()).error ?? "Request failed");
     return res.json();
   }
@@ -221,7 +226,7 @@ function Dashboard({ summaries, jobs, refresh }: { summaries: AppSummary[]; jobs
           </div>
         )}
       </div>
-      <JobPanel jobs={jobs} />
+      <JobPanel jobs={jobs} refresh={refresh} />
     </section>
   );
 }
@@ -237,9 +242,34 @@ function EmptyState() {
 }
 
 function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Promise<void> }) {
+  const [message, setMessage] = useState("");
+
   async function run(type: JobType) {
     await api.post(`/api/apps/${summary.app.id}/jobs/${type}`);
     await refresh();
+  }
+
+  async function deleteSnapshots() {
+    if (!window.confirm(`Delete ALL backup snapshots for "${summary.app.name}"? This cannot be undone.`)) return;
+    setMessage("");
+    try {
+      await api.delete(`/api/apps/${summary.app.id}/snapshots`);
+      await refresh();
+      setMessage("All snapshots deleted.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not delete snapshots");
+    }
+  }
+
+  async function removeApp() {
+    if (!window.confirm(`Remove "${summary.app.name}" from the dashboard? All backups and job history for this app will be deleted.`)) return;
+    setMessage("");
+    try {
+      await api.delete(`/api/apps/${summary.app.id}`);
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not remove app");
+    }
   }
 
   return (
@@ -271,18 +301,40 @@ function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Pro
         <button onClick={() => run("manual-restore")}><LifeBuoy /> Restore</button>
         <button onClick={() => run("prune")}><Scissors /> Prune</button>
       </div>
+      <div className="danger-actions">
+        <button type="button" className="danger" onClick={deleteSnapshots}><Trash2 /> Delete snapshots</button>
+        <button type="button" className="danger" onClick={removeApp}><Trash2 /> Remove app</button>
+      </div>
+      {message && <div className="banner info">{message}</div>}
     </article>
   );
 }
 
-function JobPanel({ jobs }: { jobs: Job[] }) {
+function JobPanel({ jobs, refresh }: { jobs: Job[]; refresh: () => Promise<void> }) {
+  const [message, setMessage] = useState("");
+
+  async function clearLogs() {
+    if (!window.confirm("Clear completed job logs from the stream? Running jobs will stay.")) return;
+    setMessage("");
+    try {
+      await api.post("/api/jobs/clear", {});
+      await refresh();
+      setMessage("Job logs cleared.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not clear job logs");
+    }
+  }
+
   return (
     <aside className="job-panel">
       <div className="section-title">
         <h2>Job Stream</h2>
-        <History />
+        <button type="button" className="ghost-button" onClick={clearLogs}><Trash2 /> Clear logs</button>
       </div>
-      {jobs.map((job) => (
+      {message && <div className="banner info">{message}</div>}
+      {jobs.length === 0 ? (
+        <p className="muted">No jobs yet.</p>
+      ) : jobs.map((job) => (
         <details key={job.id} className={`job ${job.status}`}>
           <summary>
             <span>{job.type}</span>

@@ -231,4 +231,31 @@ export class Store {
     await this.save();
     return alert;
   }
+
+  async removeApp(id: string) {
+    const app = this.state.apps.find((item) => item.id === id);
+    if (!app) throw new Error(`App ${id} not found`);
+    this.state.apps = this.state.apps.filter((item) => item.id !== id);
+    await this.save();
+    return app;
+  }
+
+  async removeRestoreProofsForApp(appId: string) {
+    this.state.restoreProofs = this.state.restoreProofs.filter((proof) => proof.appId !== appId);
+    await this.save();
+  }
+
+  async removeAlertsForApp(appId: string) {
+    this.state.alerts = this.state.alerts.filter((alert) => alert.appId !== appId);
+    await this.save();
+  }
+
+  async purgeJobHistory(appId?: string) {
+    this.state.jobs = this.state.jobs.filter((job) => {
+      if (job.status === "running" || job.status === "queued") return true;
+      if (appId) return job.appId !== appId;
+      return false;
+    });
+    await this.save();
+  }
 }

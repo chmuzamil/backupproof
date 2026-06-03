@@ -10,6 +10,7 @@ import {
   repositoryInputSchema,
   userInputSchema
 } from "../shared/schemas";
+import { deleteAllSnapshots, deleteApp } from "./appMaintenance";
 import { auditExport, recordAudit } from "./auditLog";
 import { auditAlerts } from "./alertAudit";
 import { authMiddleware, createSession, destroySession, requireRole, verifyPassword } from "./auth";
@@ -334,6 +335,47 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
       await recordAudit(store, "job.enqueue", `Enqueued ${req.params.type} for app ${req.params.id}`, req.user);
       broadcast();
       res.status(202).json(job);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/apps/:id/snapshots", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const app = store.snapshot().apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      await deleteAllSnapshots(store, req.params.id);
+      await recordAudit(store, "snapshots.delete", `Deleted all backups for ${app.name}`, req.user);
+      broadcast();
+      res.json({ ok: true, appId: req.params.id });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/apps/:id", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const app = store.snapshot().apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      await deleteApp(store, req.params.id);
+      await recordAudit(store, "app.delete", `Removed protected app ${app.name}`, req.user);
+      broadcast();
+      res.json({ ok: true, appId: req.params.id });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/jobs/clear", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const appId = typeof req.body?.appId === "string" ? req.body.appId : undefined;
+      await store.purgeJobHistory(appId);
+      await recordAudit(store, "jobs.clear", appId ? `Cleared job history for app ${appId}` : "Cleared completed job history", req.user);
+      broadcast();
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
