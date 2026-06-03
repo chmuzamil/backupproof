@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { backupPathsForApp, databaseDumpCommand, runHealthCheck } from "../server/recipes";
+import { backupPathsForApp, databaseDumpCommand, resolveRestoredPath, runHealthCheck } from "../server/recipes";
 import type { App } from "../shared/types";
 
 const baseApp: App = {
@@ -41,6 +41,24 @@ describe("recipe helpers", () => {
       "/srv/nextcloud/config",
       "/srv/nextcloud/data"
     ]);
+  });
+
+  it("finds restored folders stored under the backup path basename", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "frd-proof-basename-"));
+    const restoredDir = path.join(root, "www");
+    await fs.mkdir(restoredDir, { recursive: true });
+    await fs.writeFile(path.join(restoredDir, "index.html"), "<html></html>");
+
+    const resolved = await resolveRestoredPath(root, "/var/www");
+    expect(resolved).toBe(restoredDir);
+
+    const result = await runHealthCheck(
+      { id: "check-basename", type: "file", target: "/var/www" },
+      root,
+      () => undefined
+    );
+
+    expect(result.passed).toBe(true);
   });
 
   it("passes restore proof when a restored folder exists", async () => {

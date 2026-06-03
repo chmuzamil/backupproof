@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
-import { digestPath, restoredTargetPath } from "./recipes";
+import { digestPath, resolveRestoredPath } from "./recipes";
 import type { App, ChecksumResult, RestoreProof } from "../shared/types";
 
 export async function runChecksumProof(app: App, restoreDir: string, onLine: (line: string) => void): Promise<ChecksumResult[]> {
@@ -9,7 +9,7 @@ export async function runChecksumProof(app: App, restoreDir: string, onLine: (li
   const results: ChecksumResult[] = [];
 
   for (const target of paths) {
-    const restoredPath = restoredTargetPath(restoreDir, target);
+    const restoredPath = await resolveRestoredPath(restoreDir, target);
 
     try {
       const [sourceHash, restoredHash] = await Promise.all([digestPath(path.resolve(target)), digestPath(restoredPath)]);

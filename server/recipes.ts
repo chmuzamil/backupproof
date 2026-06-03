@@ -81,6 +81,31 @@ function restoredTargetPath(restoreDir: string, target: string) {
   return path.join(restoreDir, relative);
 }
 
+export function restorePathCandidates(restoreDir: string, target: string) {
+  const normalized = path.resolve(target);
+  const root = path.parse(normalized).root;
+  const fromRoot = path.isAbsolute(target) ? path.relative(root, normalized) : target;
+  const fromBase = path.basename(normalized);
+  const candidates = [
+    path.join(restoreDir, fromRoot),
+    path.join(restoreDir, fromBase)
+  ];
+  if (!path.isAbsolute(target)) candidates.push(path.join(restoreDir, target));
+  return [...new Set(candidates.map((item) => path.normalize(item)))];
+}
+
+export async function resolveRestoredPath(restoreDir: string, target: string) {
+  for (const candidate of restorePathCandidates(restoreDir, target)) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return restoredTargetPath(restoreDir, target);
+}
+
 export { restoredTargetPath };
 
 export async function digestPath(target: string) {
@@ -112,7 +137,7 @@ export async function digestPath(target: string) {
 
 export async function runHealthCheck(check: HealthCheck, restoreDir: string, onLine: (line: string) => void) {
   if (check.type === "file") {
-    const target = restoredTargetPath(restoreDir, check.target);
+    const target = await resolveRestoredPath(restoreDir, check.target);
     try {
       const stat = await fs.stat(target);
       if (check.expected) {

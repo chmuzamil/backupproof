@@ -52,6 +52,11 @@ async function walkDir(root: string, base: string, entries: ManifestEntry[], onF
   }
 }
 
+function sourceRelativePath(resolved: string) {
+  const root = path.parse(resolved).root;
+  return path.relative(root, resolved).replace(/\\/g, "/");
+}
+
 export async function buildManifest(sourcePaths: string[], onLine: (line: string) => void) {
   const entries: ManifestEntry[] = [];
   for (const source of sourcePaths) {
@@ -59,11 +64,12 @@ export async function buildManifest(sourcePaths: string[], onLine: (line: string
     await fs.access(resolved);
     const stat = await fs.stat(resolved);
     if (stat.isFile()) {
+      const rel = sourceRelativePath(resolved);
       const sha256 = await sha256File(resolved);
-      const rel = path.basename(resolved);
       entries.push({ path: rel, sha256, size: stat.size, mtimeMs: stat.mtimeMs, chunk: `${sha256}.enc` });
     } else {
-      await walkDir(resolved, path.basename(resolved), entries, (rel) => onLine(`Indexed ${rel}`));
+      const base = sourceRelativePath(resolved);
+      await walkDir(resolved, base, entries, (rel) => onLine(`Indexed ${rel}`));
     }
   }
   return entries;
@@ -83,20 +89,25 @@ export async function readFileForEntry(sourcePaths: string[], entry: ManifestEnt
   for (const source of sourcePaths) {
     const resolved = path.resolve(source);
     const stat = await fs.stat(resolved);
+    const rootRel = sourceRelativePath(resolved);
+    const baseName = path.basename(resolved);
+
     if (stat.isFile()) {
-      if (entry.path === path.basename(resolved)) return fs.readFile(resolved);
+      if (entry.path === rootRel || entry.path === baseName) return fs.readFile(resolved);
       continue;
     }
-    const baseName = path.basename(resolved);
-    let relative = entry.path;
-    if (relative.startsWith(`${baseName}/`)) relative = relative.slice(baseName.length + 1);
-    else if (relative === baseName) relative = "";
-    const candidate = path.join(resolved, relative);
-    try {
-      await fs.access(candidate);
-      return fs.readFile(candidate);
-    } catch {
-      continue;
+
+    for (const prefix of [rootRel, baseName]) {
+      if (entry.path === prefix || entry.path.startsWith(`${prefix}/`)) {
+        const relative = entry.path === prefix ? "" : entry.path.slice(prefix.length + 1);
+        const candidate = path.join(resolved, relative);
+        try {
+          await fs.access(candidate);
+          return fs.readFile(candidate);
+        } catch {
+          continue;
+        }
+      }
     }
   }
   throw new Error(`Source file not found for manifest entry: ${entry.path}`);

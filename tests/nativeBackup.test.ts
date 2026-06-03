@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveRestoredPath } from "../server/recipes";
 import { nativeBackup, nativePrune, nativeRestore, nativeSnapshots } from "../server/nativeBackup";
 import type { App, Repository } from "../shared/types";
 
@@ -50,7 +51,8 @@ describe("native backup engine", () => {
 
     expect(snapshots[0].id).toBe(snapshot.id);
     expect(snapshots[0].sizeBytes).toBeGreaterThan(0);
-    await expect(fs.readFile(path.join(restore, "source", "hello.txt"), "utf8")).resolves.toBe("hello native backup");
+    const restoredSource = await resolveRestoredPath(restore, source);
+    await expect(fs.readFile(path.join(restoredSource, "hello.txt"), "utf8")).resolves.toBe("hello native backup");
   });
 
   it("prunes older native backup bundles by keep count", async () => {

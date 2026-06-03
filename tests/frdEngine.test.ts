@@ -19,6 +19,16 @@ describe("FRD chunk crypto", () => {
 });
 
 describe("FRD manifest", () => {
+  it("stores root-relative paths in manifests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "frd-manifest-root-"));
+    const source = path.join(root, "var", "www");
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(path.join(source, "index.html"), "hello");
+
+    const entries = await buildManifest([source], () => undefined);
+    expect(entries.some((entry) => entry.path.endsWith("var/www/index.html") || entry.path.endsWith("var\\www\\index.html"))).toBe(true);
+  });
+
   it("detects changed files incrementally", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "frd-manifest-"));
     const source = path.join(root, "data");
