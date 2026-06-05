@@ -53,6 +53,7 @@ It supports:
 
 - Personal folders
 - Manually selected files and folders
+- A small file browser for choosing folders and files without typing paths
 - Self-hosted app folders
 - Docker Compose projects
 - PostgreSQL databases
@@ -60,6 +61,8 @@ It supports:
 - CMS websites: WordPress, Drupal, Joomla, Ghost, and Nextcloud
 
 The simple mode scans for common folders and discovered websites. Long technical lists, such as running services, should be hidden behind accordions or advanced sections.
+
+The file browser lists one folder at a time and lets users add either the current folder or a specific file. It should remain compact, friendly, and secondary to the main "Help me choose" flow.
 
 When a CMS is detected, BackupProof should offer a plain action such as **Protect this website** or **Protect site and database**. That action should fill in the site folder and database settings when safely available. Database passwords must not be displayed if discovered from config files or container environment variables.
 
@@ -132,6 +135,7 @@ The green check does not mean "a backup job succeeded." It means the latest elig
 Relevant current discovery code:
 
 - `server/discovery.ts`: host, service, Docker, database, and CMS discovery
+- `server/api.ts`: `/api/filesystem/browse` endpoint for the Protect Data file browser
 - `shared/types.ts`: `DiscoveryResult`, `DiscoveredCmsApp`, and related types
 - `src/main.tsx`: Protect Data wizard and user-facing discovery UI
 
@@ -164,4 +168,3 @@ At the time this file was added:
 - 20 test files pass
 - 58 tests pass
 - Production dependency audit reports 0 vulnerabilities
-

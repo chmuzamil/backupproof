@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -40,12 +41,50 @@ import { buildRecoveryRunbook, createEvidenceBundle } from "./recoveryEvidence";
 import { inspectRestorePreflight } from "./restorePreflight";
 import { compareSnapshots, inspectSnapshotContents } from "./snapshotInspector";
 import { Store } from "./store";
-import type { AppSummary, SnapshotSummary, User } from "../shared/types";
+import type { AppSummary, FileBrowserEntry, FileBrowserResult, SnapshotSummary, User } from "../shared/types";
 
 declare module "express-serve-static-core" {
   interface Request {
     user?: User;
   }
+}
+
+async function fileBrowserRoots(): Promise<FileBrowserEntry[]> {
+  const home = os.homedir();
+  const candidates = process.platform === "win32"
+    ? [
+      { name: "Home", path: home },
+      { name: "Desktop", path: path.join(home, "Desktop") },
+      { name: "Documents", path: path.join(home, "Documents") },
+      { name: "Pictures", path: path.join(home, "Pictures") },
+      { name: "Downloads", path: path.join(home, "Downloads") },
+      { name: "Websites", path: "C:\\inetpub\\wwwroot" },
+      { name: "Program data", path: "C:\\ProgramData" }
+    ]
+    : [
+      { name: "Home", path: home },
+      { name: "Documents", path: path.join(home, "Documents") },
+      { name: "Desktop", path: path.join(home, "Desktop") },
+      { name: "Websites", path: "/var/www" },
+      { name: "Self-hosted apps", path: "/srv" },
+      { name: "Installed apps", path: "/opt" },
+      { name: "Service data", path: "/var/lib" }
+    ];
+
+  const seen = new Set<string>();
+  const roots: FileBrowserEntry[] = [];
+  for (const candidate of candidates) {
+    const resolvedPath = path.resolve(candidate.path);
+    if (seen.has(resolvedPath.toLowerCase())) continue;
+    seen.add(resolvedPath.toLowerCase());
+    try {
+      const stat = await fsPromises.stat(resolvedPath);
+      if (stat.isDirectory()) roots.push({ ...candidate, path: resolvedPath, type: "folder", modifiedAt: stat.mtime.toISOString() });
+    } catch {
+      // skip missing starting locations
+    }
+  }
+  return roots;
 }
 
 export function createApi(store: Store, runner: JobRunner, broadcast: () => void) {
@@ -278,6 +317,44 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
   router.get("/discovery", auth, async (_req, res, next) => {
     try {
       res.json(await discoverHost());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/filesystem/browse", auth, async (req, res, next) => {
+    try {
+      const requestedPath = typeof req.query.path === "string" && req.query.path.trim()
+        ? req.query.path.trim()
+        : os.homedir();
+      const resolvedPath = path.resolve(requestedPath);
+      const currentStat = await fsPromises.stat(resolvedPath);
+      if (!currentStat.isDirectory()) throw new Error("Choose a folder to browse.");
+
+      const entries = await fsPromises.readdir(resolvedPath, { withFileTypes: true });
+      const visibleEntries: FileBrowserEntry[] = await Promise.all(entries
+        .filter((entry) => !entry.name.startsWith("."))
+        .slice(0, 250)
+        .map(async (entry) => {
+          const entryPath = path.join(resolvedPath, entry.name);
+          const stat = await fsPromises.stat(entryPath).catch(() => undefined);
+          return {
+            name: entry.name,
+            path: entryPath,
+            type: entry.isDirectory() ? "folder" : "file",
+            size: stat?.isFile() ? stat.size : undefined,
+            modifiedAt: stat?.mtime?.toISOString()
+          };
+        }));
+
+      const roots = await fileBrowserRoots();
+      const result: FileBrowserResult = {
+        currentPath: resolvedPath,
+        parentPath: path.dirname(resolvedPath) !== resolvedPath ? path.dirname(resolvedPath) : undefined,
+        entries: visibleEntries.sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "folder" ? -1 : 1),
+        roots
+      };
+      res.json(result);
     } catch (error) {
       next(error);
     }

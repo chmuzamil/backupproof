@@ -368,6 +368,21 @@ export interface DiscoveredCmsApp {
   hint: string;
 }
 
+export interface FileBrowserEntry {
+  name: string;
+  path: string;
+  type: "folder" | "file";
+  size?: number;
+  modifiedAt?: string;
+}
+
+export interface FileBrowserResult {
+  currentPath: string;
+  parentPath?: string;
+  entries: FileBrowserEntry[];
+  roots: FileBrowserEntry[];
+}
+
 export interface DiscoveredDatabase {
   id: string;
   engine: "postgres" | "mysql" | "mariadb";

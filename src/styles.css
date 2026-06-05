@@ -2483,6 +2483,113 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.file-picker {
+  display: grid;
+  gap: 12px;
+  background: #fbfcfd;
+  border: 1px solid #d8e2e8;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.file-picker .section-title {
+  margin-bottom: 0;
+}
+
+.file-picker .section-title h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.file-picker-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-picker-roots button,
+.file-picker-current button,
+.file-picker-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #c9d8df;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #31566c;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.file-picker-roots svg,
+.file-picker-current svg,
+.file-picker-row svg {
+  width: 17px;
+  height: 17px;
+}
+
+.file-picker-current {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.file-picker-current code {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: #eef4f7;
+  border: 1px solid #d5e0e6;
+  border-radius: 8px;
+  color: #294b5d;
+  padding: 9px 10px;
+}
+
+.file-picker-list {
+  display: grid;
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid #dce4dc;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.file-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid #edf1ed;
+  padding: 7px;
+}
+
+.file-picker-row:last-child {
+  border-bottom: 0;
+}
+
+.file-picker-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  background: transparent;
+  color: #17211b;
+  padding: 7px;
+  text-align: left;
+}
+
+.file-picker-open span {
+  overflow-wrap: anywhere;
+}
+
+.file-picker-add {
+  min-width: 68px;
+}
+
 .service-row p {
   color: #334139;
   margin: 6px 0 0;
@@ -2679,6 +2786,16 @@ textarea {
   .service-accordion summary {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .file-picker-current,
+  .file-picker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .file-picker-current .infra-use,
+  .file-picker-add {
+    justify-self: start;
   }
 
   .wizard-review div {

@@ -83,6 +83,7 @@ It supports:
 - PostgreSQL databases
 - MySQL and MariaDB databases
 - Guided folder discovery
+- A small file browser for choosing folders and files without typing paths
 - Advanced setup for technical users
 
 When BackupProof detects a CMS, it can fill in the full site folder and the database details it can safely read. It does not display database passwords discovered from config files or container environment variables.
@@ -274,6 +275,7 @@ Open **Protect data** and choose what matters:
 
 - Use **Help me choose** for common folders.
 - If a website or CMS is found, choose **Protect this website**.
+- Use **Browse folders** to click through the machine and add folders or files.
 - Use **Advanced setup** for app folders, Docker Compose projects, and databases.
 - Choose where backup copies should live.
 - Pick one simple recovery check.

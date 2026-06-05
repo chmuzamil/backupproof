@@ -29,7 +29,7 @@ import {
   Upload,
   XCircle
 } from "lucide-react";
-import type { Alert, AppSummary, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
+import type { Alert, AppSummary, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
 import { brand } from "../shared/brand";
 import { readinessAdvice, readinessCounts, type ReadinessState } from "../shared/readiness";
 import { buildRecoveryCoach, type CoachRoute, type RecoveryCoach } from "../shared/recoveryCoach";
@@ -59,6 +59,10 @@ const api = {
   },
   async getDiscovery(): Promise<DiscoveryResult> {
     return fetch("/api/discovery").then((res) => res.json());
+  },
+  async browseFiles(path?: string): Promise<FileBrowserResult> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    return fetch(`/api/filesystem/browse${query}`).then((res) => res.json());
   },
   async post(path: string, body?: unknown) {
     const res = await fetch(path, {
@@ -746,6 +750,77 @@ function WizardField({ label, hint, children, full }: { label: string; hint?: st
   );
 }
 
+function FileBrowserPicker({
+  browser,
+  loading,
+  message,
+  onBrowse,
+  onAdd
+}: {
+  browser: FileBrowserResult | null;
+  loading: boolean;
+  message: string;
+  onBrowse: (path?: string) => void;
+  onAdd: (path: string) => void;
+}) {
+  return (
+    <div className="file-picker">
+      <div className="section-title compact-title">
+        <div>
+          <h4><FolderSearch /> Browse folders</h4>
+          <p className="muted">Click through folders and add the files or folders you want protected.</p>
+        </div>
+        <button type="button" onClick={() => onBrowse()} disabled={loading}><FolderSearch /> {loading ? "Opening..." : "Start at home"}</button>
+      </div>
+      {message && <div className="banner warning">{message}</div>}
+      {browser ? (
+        <>
+          <div className="file-picker-roots">
+            {browser.roots.map((root) => (
+              <button type="button" key={root.path} onClick={() => onBrowse(root.path)}>
+                <Folder /> {root.name}
+              </button>
+            ))}
+          </div>
+          <div className="file-picker-current">
+            {browser.parentPath && (
+              <button type="button" onClick={() => onBrowse(browser.parentPath)}>
+                <ChevronLeft /> Up one folder
+              </button>
+            )}
+            <code>{browser.currentPath}</code>
+            <button type="button" className="infra-use" onClick={() => onAdd(browser.currentPath)}>
+              Add this folder
+            </button>
+          </div>
+          <div className="file-picker-list">
+            {browser.entries.length === 0 ? (
+              <p className="muted">This folder is empty or cannot show its contents.</p>
+            ) : browser.entries.map((entry) => (
+              <div className="file-picker-row" key={entry.path}>
+                <button type="button" className="file-picker-open" onClick={() => entry.type === "folder" ? onBrowse(entry.path) : onAdd(entry.path)}>
+                  {entry.type === "folder" ? <Folder /> : <FileText />}
+                  <span>{entry.name}</span>
+                  {entry.type === "folder" && <ChevronRight />}
+                </button>
+                <button type="button" className="file-picker-add" onClick={() => onAdd(entry.path)}>
+                  Add
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="empty compact-empty">
+          <FolderSearch />
+          <h2>Open the file browser</h2>
+          <p>Browse this machine and add folders or files without typing paths.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type WizardRecipe = "compose-files" | "docker-compose" | "postgres" | "mysql";
 type WizardVault = "local" | "sftp" | "s3" | "b2" | "google-drive";
 type WizardEngine = "frd" | "restic" | "kopia";
@@ -785,6 +860,9 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [fileBrowser, setFileBrowser] = useState<FileBrowserResult | null>(null);
+  const [browsingFiles, setBrowsingFiles] = useState(false);
+  const [browserMessage, setBrowserMessage] = useState("");
   const [vaultPrefilled, setVaultPrefilled] = useState(false);
 
   const [appName, setAppName] = useState("");
@@ -871,6 +949,28 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
     setBackupPaths(paths.join("\n"));
   }
 
+  function addPathToSelection(itemPath: string) {
+    const next = mergePaths([itemPath]);
+    setBackupPaths(next);
+    setSelectedPaths(parsePaths(next));
+    if (!healthTarget) setHealthTarget(itemPath);
+    setMessage("Added to the protection list.");
+  }
+
+  async function browseFiles(path?: string) {
+    setBrowsingFiles(true);
+    setBrowserMessage("");
+    try {
+      const result = await api.browseFiles(path);
+      if ("error" in result) throw new Error(String(result.error));
+      setFileBrowser(result);
+    } catch (err) {
+      setBrowserMessage(err instanceof Error ? err.message : "Could not open that folder.");
+    } finally {
+      setBrowsingFiles(false);
+    }
+  }
+
   async function scan() {
     setScanning(true);
     try {
@@ -892,6 +992,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
 
   useEffect(() => {
     void scan();
+    void browseFiles();
   }, []);
 
   function togglePath(itemPath: string) {
@@ -1216,6 +1317,13 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
                       </label>
                     ))}
                   </div>
+                  <FileBrowserPicker
+                    browser={fileBrowser}
+                    loading={browsingFiles}
+                    message={browserMessage}
+                    onBrowse={(itemPath) => void browseFiles(itemPath)}
+                    onAdd={addPathToSelection}
+                  />
                   {discovery.services.length > 0 && (
                     <details className="wizard-subpanel service-accordion">
                       <summary>
@@ -1379,7 +1487,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
 
               <WizardField
                 label="Folders or files to protect"
-                hint="One per line. These must exist on this machine."
+                hint="Use the browser below, or type one path per line."
                 full
               >
                 <textarea
@@ -1389,6 +1497,14 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
                   rows={3}
                 />
               </WizardField>
+
+              <FileBrowserPicker
+                browser={fileBrowser}
+                loading={browsingFiles}
+                message={browserMessage}
+                onBrowse={(itemPath) => void browseFiles(itemPath)}
+                onAdd={addPathToSelection}
+              />
 
               {recipeType === "docker-compose" && (
                 <WizardField label="App setup file" hint="Full path to compose.yml or docker-compose.yml">
