@@ -126,7 +126,7 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
       const clientSecret = String(req.body?.clientSecret ?? "").trim();
       if (!clientId || !clientSecret) throw new Error("Google OAuth client ID and client secret are required.");
       const redirectUri = `${req.protocol}://${req.get("host")}/api/google-drive/oauth/callback`;
-      res.json({ authorizationUrl: startGoogleDriveOAuth({ clientId, clientSecret, redirectUri }), redirectUri });
+      res.json({ authorizationUrl: await startGoogleDriveOAuth({ clientId, clientSecret, redirectUri }), redirectUri });
     } catch (error) {
       next(error);
     }

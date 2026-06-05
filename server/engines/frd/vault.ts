@@ -118,7 +118,7 @@ export async function writeSnapshotMeta(repository: Repository, appId: string, s
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDrivePut } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
     await googleDrivePut(drive, folder, `${snapshotId}.json`, json, "application/json");
   }
@@ -169,7 +169,7 @@ export async function writeChunk(repository: Repository, appId: string, chunkNam
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDrivePut } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}/chunks`);
     await googleDrivePut(drive, folder, chunkName, data, "application/octet-stream", true);
   }
@@ -206,7 +206,7 @@ export async function readChunk(repository: Repository, appId: string, chunkName
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDriveGet } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}/chunks`);
     return googleDriveGet(drive, folder, chunkName);
   }
@@ -248,9 +248,9 @@ export async function listSnapshotMetas(repository: Repository, appId: string, c
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDriveList } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
-    return (await googleDriveList(drive, folder)).map((file) => file.name ?? "").filter((name) => name.endsWith(".json"));
+    return (await googleDriveList(drive, folder)).map((file) => file.name ?? "").filter((name: string) => name.endsWith(".json"));
   }
   return [];
 }
@@ -286,7 +286,7 @@ export async function readSnapshotMeta(repository: Repository, appId: string, sn
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDriveGet } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
     return (await googleDriveGet(drive, folder, `${snapshotId}.json`)).toString("utf8");
   }
@@ -320,7 +320,7 @@ export async function deleteSnapshot(repository: Repository, appId: string, snap
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient, googleDriveDelete } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
     await googleDriveDelete(drive, folder, `${snapshotId}.json`);
   }
@@ -352,7 +352,7 @@ export async function checkVault(repository: Repository, credentialSecret?: stri
   }
   if (repository.type === "google-drive") {
     const { ensureGoogleDriveFolder, googleDriveClient } = await googleDriveTools();
-    const drive = googleDriveClient(credentialSecret);
+    const drive = await googleDriveClient(credentialSecret);
     await ensureGoogleDriveFolder(drive, repository.location);
   }
 }
