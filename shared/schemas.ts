@@ -37,10 +37,11 @@ export const appInputSchema = z.object({
 export const repositoryInputSchema = z.object({
   name: z.string().min(1),
   engine: z.enum(["frd", "native", "restic", "kopia"]).default("frd"),
-  type: z.enum(["local", "sftp", "s3", "b2"]),
+  type: z.enum(["local", "sftp", "s3", "b2", "google-drive"]),
   location: z.string().min(1),
   password: z.string().min(8, "Vault passphrase must be at least 8 characters").optional(),
   credentials: z.record(z.string()).optional(),
+  googleConnectionId: z.string().optional(),
   objectLock: z.boolean().default(false),
   bandwidthLimitKbps: z.number().int().min(0).default(0)
 });
@@ -63,6 +64,13 @@ export const notificationInputSchema = z.object({
   type: z.enum(["email", "webhook", "slack", "discord", "telegram", "pagerduty"]),
   enabled: z.boolean().default(true),
   config: z.record(z.string())
+});
+
+export const restoreDestinationTemplateInputSchema = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+  description: z.string().optional(),
+  appId: z.string().optional()
 });
 
 export const loginInputSchema = z.object({

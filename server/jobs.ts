@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
+import { assertBackupSafety } from "./backupSafety";
 import { computeConfidenceScore } from "./confidenceScore";
 import { engineContext, getEngineAdapter } from "./engines";
 import { runChecksumProof, writeDrReport, writeProofReport } from "./proofReport";
+import { verifyRestoredSnapshot } from "./restoreVerification";
 import { sendAlert } from "./notifications";
 import { Store } from "./store";
 import { backupPathsForApp, prepareDatabaseDump, prepareDockerCompose, runHealthCheck } from "./recipes";
@@ -15,7 +17,7 @@ export class JobRunner {
 
   constructor(private readonly store: Store, private readonly emit: () => void) {}
 
-  async enqueue(type: JobType, appId?: string, options: Pick<Job, "requestedSnapshotId" | "restoreTargetDir"> = {}) {
+  async enqueue(type: JobType, appId?: string, options: Pick<Job, "requestedSnapshotId" | "restoreTargetDir" | "restorePaths" | "drScenario"> = {}) {
     const job = await this.store.addJob({ type, appId, ...options });
     this.emit();
     this.queue.push(job);
@@ -62,6 +64,11 @@ export class JobRunner {
       const ctx = this.repoSecrets(repository);
 
       if (job.type === "backup") {
+        const backupRepositories = [
+          repository,
+          ...(app.secondaryRepositoryIds ?? []).map((id) => state.repositories.find((item) => item.id === id)).filter((item): item is Repository => Boolean(item))
+        ];
+        await assertBackupSafety(app, backupRepositories, onLine);
         await prepareDockerCompose(app, onLine);
         await prepareDatabaseDump(app, onLine, this.store.getSecret(app.database?.passwordSecretId));
         const snapshot = await adapter.backup(app, repository, backupPathsForApp(app), onLine, ctx);
@@ -208,11 +215,18 @@ export class JobRunner {
     }
     const restoreDir = job.restoreTargetDir?.trim() || path.join(config.dataDir, "manual-restores", app.id, snapshotId);
     await onLine(`Manual restore target: ${restoreDir}`);
-    await adapter.restore(app, repository, snapshotId, restoreDir, onLine, ctx);
-    await this.store.updateJob(job.id, { snapshotId, restoreTargetDir: restoreDir });
+    if (job.restorePaths?.length) await onLine(`Selective restore: ${job.restorePaths.length} chosen path${job.restorePaths.length === 1 ? "" : "s"}.`);
+    await adapter.restore(app, repository, snapshotId, restoreDir, onLine, ctx, { paths: job.restorePaths });
+    const restoreVerification = await verifyRestoredSnapshot({ app, repository, snapshotId, restoreDir, selectedPaths: job.restorePaths, ctx, onLine });
+    await this.store.updateJob(job.id, { snapshotId, restoreTargetDir: restoreDir, restoreVerification });
+    if (restoreVerification.supported && restoreVerification.failedFiles > 0) {
+      if (finalize) await this.finish(job.id, 1, "Post-restore verification failed");
+      return;
+    }
     if (finalize) {
       await this.finish(job.id, 0);
     }
+    return restoreVerification;
   }
 
   private async runDrJob(job: Job, app: App, repository: Repository) {
@@ -220,14 +234,33 @@ export class JobRunner {
       await this.store.appendLog(job.id, line);
       this.emit();
     };
-    const scenario = job.restoreTargetDir ?? "lost-server";
+    const scenario = job.drScenario ?? "lost-server";
     const steps = [
       `Scenario: ${scenario}`,
       "Selected snapshot and restore destination",
-      "Restore completed",
+      job.restorePaths?.length ? `${job.restorePaths.length} selected restore path${job.restorePaths.length === 1 ? "" : "s"}` : "Full restore selected",
+      "Restore completed and verified",
       "Restore proof started"
     ];
-    await this.runManualRestore({ ...job, type: "manual-restore" }, app, repository, false);
+    const restoreVerification = await this.runManualRestore({ ...job, type: "manual-restore" }, app, repository, false);
+    if (restoreVerification?.supported && restoreVerification.failedFiles > 0) {
+      await writeDrReport({
+        appId: app.id,
+        appName: app.name,
+        scenario,
+        snapshotId: job.requestedSnapshotId ?? "latest",
+        restoredAt: new Date().toISOString(),
+        proofStatus: "not-run",
+        confidenceScore: 0,
+        restoreTargetDir: job.restoreTargetDir,
+        selectedPaths: job.restorePaths ?? [],
+        restoreVerification,
+        steps
+      });
+      await onLine("DR report written.");
+      await this.finish(job.id, 1, "DR run failed post-restore verification");
+      return;
+    }
     const passed = await this.runRestoreTest(job.id, app, repository, false);
     const proof = this.store.snapshot().restoreProofs.find((p) => p.appId === app.id);
     await writeDrReport({
@@ -238,6 +271,9 @@ export class JobRunner {
       restoredAt: new Date().toISOString(),
       proofStatus: proof?.status ?? "unknown",
       confidenceScore: proof?.confidenceScore ?? 0,
+      restoreTargetDir: job.restoreTargetDir,
+      selectedPaths: job.restorePaths ?? [],
+      restoreVerification,
       steps
     });
     await onLine("DR report written.");

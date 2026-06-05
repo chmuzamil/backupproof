@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyCmsImage,
   classifyDatabaseImage,
+  cmsDatabaseFromEnv,
+  cmsPathsFromMounts,
   envFromDockerConfig,
   parseDatabaseList,
   parseDockerInspectRecord,
+  parseWordPressConfig,
   serviceHint,
   uniquePathCandidates
 } from "../server/discovery";
@@ -30,6 +34,61 @@ describe("host discovery", () => {
     expect(classifyDatabaseImage("mariadb:11")).toBe("mariadb");
     expect(classifyDatabaseImage("mysql:8")).toBe("mysql");
     expect(classifyDatabaseImage("nginx:latest")).toBeUndefined();
+  });
+
+  it("recognizes common CMS container images", () => {
+    expect(classifyCmsImage("wordpress:php8.2")).toBe("wordpress");
+    expect(classifyCmsImage("drupal:10")).toBe("drupal");
+    expect(classifyCmsImage("joomla:latest")).toBe("joomla");
+    expect(classifyCmsImage("ghost:5")).toBe("ghost");
+    expect(classifyCmsImage("nextcloud:apache")).toBe("nextcloud");
+    expect(classifyCmsImage("nginx:latest")).toBeUndefined();
+  });
+
+  it("maps CMS container mounts to whole-site backup paths", () => {
+    const paths = cmsPathsFromMounts("wordpress", [
+      { type: "bind", source: "/srv/wordpress", destination: "/var/www/html" }
+    ]);
+
+    expect(paths.rootPath).toBe("/srv/wordpress");
+    expect(paths.contentPath).toBe("/srv/wordpress/wp-content");
+    expect(paths.configPath).toBe("/srv/wordpress/wp-config.php");
+    expect(paths.backupPaths).toEqual(["/srv/wordpress"]);
+  });
+
+  it("reads safe WordPress database details without returning the password", () => {
+    const parsed = parseWordPressConfig(`
+      define('DB_NAME', 'shop');
+      define('DB_USER', 'shop_user');
+      define('DB_PASSWORD', 'secret');
+      define('DB_HOST', 'db:3307');
+    `);
+
+    expect(parsed).toMatchObject({
+      engine: "mysql",
+      host: "db",
+      port: 3307,
+      database: "shop",
+      username: "shop_user",
+      passwordAvailable: true
+    });
+    expect(JSON.stringify(parsed)).not.toContain("secret");
+  });
+
+  it("builds CMS database settings from Docker env", () => {
+    expect(cmsDatabaseFromEnv("wordpress", {
+      WORDPRESS_DB_HOST: "db:3306",
+      WORDPRESS_DB_NAME: "blog",
+      WORDPRESS_DB_USER: "wp",
+      WORDPRESS_DB_PASSWORD: "hidden"
+    })).toMatchObject({
+      engine: "mysql",
+      host: "db",
+      port: 3306,
+      database: "blog",
+      username: "wp",
+      passwordAvailable: true
+    });
   });
 
   it("parses docker inspect records into container suggestions", () => {

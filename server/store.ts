@@ -3,11 +3,23 @@ import path from "node:path";
 import { v4 as uuid } from "uuid";
 import { config } from "./config";
 import { hashPassword } from "./auth";
-import { encryptSecret } from "./crypto";
-import type { Alert, App, AuditEntry, DashboardState, FleetAgent, Job, NotificationTarget, Policy, Repository, RestoreProof, User } from "../shared/types";
+import { decryptSecret, encryptSecret } from "./crypto";
+import type { Alert, App, AuditEntry, DashboardState, FleetAgent, Job, NotificationTarget, Policy, Repository, RestoreDestinationTemplate, RestoreProof, User } from "../shared/types";
 
 interface PersistedState extends Omit<DashboardState, "environment"> {
   secrets: Record<string, string>;
+}
+
+export interface RecoveryStatePayload {
+  format: "backupproof-recovery-state-v1";
+  exportedAt: string;
+  apps: App[];
+  repositories: Repository[];
+  policies: Policy[];
+  restoreProofs: RestoreProof[];
+  notificationTargets: NotificationTarget[];
+  restoreDestinationTemplates?: RestoreDestinationTemplate[];
+  secrets: Record<string, unknown>;
 }
 
 const statePath = path.join(config.dataDir, "state.json");
@@ -35,6 +47,7 @@ function defaultState(): PersistedState {
     jobs: [],
     restoreProofs: [],
     notificationTargets: [],
+    restoreDestinationTemplates: [],
     alerts: [],
     users: [
       {
@@ -99,6 +112,39 @@ export class Store {
     return id ? this.state.secrets[id] : undefined;
   }
 
+  exportRecoveryState(): RecoveryStatePayload {
+    return {
+      format: "backupproof-recovery-state-v1",
+      exportedAt: now(),
+      apps: this.state.apps,
+      repositories: this.state.repositories,
+      policies: this.state.policies,
+      restoreProofs: this.state.restoreProofs,
+      notificationTargets: this.state.notificationTargets,
+      restoreDestinationTemplates: this.state.restoreDestinationTemplates,
+      secrets: Object.fromEntries(Object.entries(this.state.secrets).map(([id, sealed]) => [id, decryptSecret<unknown>(sealed)]))
+    };
+  }
+
+  async importRecoveryState(payload: RecoveryStatePayload) {
+    if (payload.format !== "backupproof-recovery-state-v1") throw new Error("Unsupported BackupProof recovery kit.");
+    const encryptedSecrets = Object.fromEntries(Object.entries(payload.secrets).map(([id, value]) => [id, encryptSecret(value)]));
+    this.state = {
+      ...this.state,
+      apps: payload.apps,
+      repositories: payload.repositories,
+      policies: payload.policies,
+      restoreProofs: payload.restoreProofs,
+      notificationTargets: payload.notificationTargets,
+      restoreDestinationTemplates: payload.restoreDestinationTemplates ?? this.state.restoreDestinationTemplates,
+      jobs: [],
+      alerts: [],
+      secrets: encryptedSecrets
+    };
+    await this.save();
+    return this.snapshot();
+  }
+
   async upsertRepository(input: Omit<Repository, "id" | "createdAt" | "updatedAt"> & { id?: string }) {
     const item: Repository = { ...input, engine: input.engine === "native" ? "frd" : (input.engine ?? "frd"), id: input.id ?? uuid(), createdAt: now(), updatedAt: now() };
     const index = this.state.repositories.findIndex((repo) => repo.id === item.id);
@@ -134,6 +180,24 @@ export class Store {
     const index = this.state.notificationTargets.findIndex((target) => target.id === item.id);
     if (index >= 0) this.state.notificationTargets[index] = item;
     else this.state.notificationTargets.push(item);
+    await this.save();
+    return item;
+  }
+
+  async upsertRestoreDestinationTemplate(input: Omit<RestoreDestinationTemplate, "id" | "createdAt" | "updatedAt"> & { id?: string }) {
+    const existing = input.id ? this.state.restoreDestinationTemplates.find((template) => template.id === input.id) : undefined;
+    const item: RestoreDestinationTemplate = { ...input, id: input.id ?? uuid(), createdAt: existing?.createdAt ?? now(), updatedAt: now() };
+    const index = this.state.restoreDestinationTemplates.findIndex((template) => template.id === item.id);
+    if (index >= 0) this.state.restoreDestinationTemplates[index] = item;
+    else this.state.restoreDestinationTemplates.push(item);
+    await this.save();
+    return item;
+  }
+
+  async removeRestoreDestinationTemplate(id: string) {
+    const item = this.state.restoreDestinationTemplates.find((template) => template.id === id);
+    if (!item) throw new Error(`Restore destination template ${id} not found`);
+    this.state.restoreDestinationTemplates = this.state.restoreDestinationTemplates.filter((template) => template.id !== id);
     await this.save();
     return item;
   }
@@ -201,7 +265,9 @@ export class Store {
 
   async addRestoreProof(proof: Omit<RestoreProof, "id">) {
     const item: RestoreProof = { ...proof, id: uuid() };
-    this.state.restoreProofs = [item, ...this.state.restoreProofs.filter((old) => old.appId !== item.appId)];
+    const otherApps = this.state.restoreProofs.filter((old) => old.appId !== item.appId);
+    const appHistory = this.state.restoreProofs.filter((old) => old.appId === item.appId).slice(0, 49);
+    this.state.restoreProofs = [item, ...appHistory, ...otherApps];
     await this.save();
     return item;
   }

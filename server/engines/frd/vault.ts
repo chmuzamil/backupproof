@@ -7,6 +7,8 @@ import SftpClient from "ssh2-sftp-client";
 import { decryptSecret } from "../../crypto";
 import type { Repository } from "../../../shared/types";
 
+const googleDriveTools = () => import("../../googleDrive");
+
 export interface S3Credentials {
   accessKey: string;
   secretKey: string;
@@ -112,6 +114,13 @@ export async function writeSnapshotMeta(repository: Repository, appId: string, s
       credentials: { accessKeyId: creds.accessKey, secretAccessKey: creds.secretKey }
     });
     await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: json, ContentType: "application/json" }));
+    return;
+  }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDrivePut } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
+    await googleDrivePut(drive, folder, `${snapshotId}.json`, json, "application/json");
   }
 }
 
@@ -156,6 +165,13 @@ export async function writeChunk(repository: Repository, appId: string, chunkNam
       params: { Bucket: bucket, Key: key, Body: data, ContentType: "application/octet-stream" }
     });
     await upload.done();
+    return;
+  }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDrivePut } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}/chunks`);
+    await googleDrivePut(drive, folder, chunkName, data, "application/octet-stream", true);
   }
 }
 
@@ -187,6 +203,12 @@ export async function readChunk(repository: Repository, appId: string, chunkName
     });
     const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     return Buffer.from(await result.Body!.transformToByteArray());
+  }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDriveGet } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}/chunks`);
+    return googleDriveGet(drive, folder, chunkName);
   }
   throw new Error(`Unsupported vault type: ${repository.type}`);
 }
@@ -224,6 +246,12 @@ export async function listSnapshotMetas(repository: Repository, appId: string, c
       .map((o) => o.Key?.split("/").pop() ?? "")
       .filter((name) => name.endsWith(".json"));
   }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDriveList } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
+    return (await googleDriveList(drive, folder)).map((file) => file.name ?? "").filter((name) => name.endsWith(".json"));
+  }
   return [];
 }
 
@@ -256,6 +284,12 @@ export async function readSnapshotMeta(repository: Repository, appId: string, sn
     const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     return Buffer.from(await result.Body!.transformToByteArray()).toString("utf8");
   }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDriveGet } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
+    return (await googleDriveGet(drive, folder, `${snapshotId}.json`)).toString("utf8");
+  }
   throw new Error(`Unsupported vault type: ${repository.type}`);
 }
 
@@ -282,6 +316,13 @@ export async function deleteSnapshot(repository: Repository, appId: string, snap
     });
     const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    return;
+  }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient, googleDriveDelete } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    const folder = await ensureGoogleDriveFolder(drive, `${repository.location}/${appId}`);
+    await googleDriveDelete(drive, folder, `${snapshotId}.json`);
   }
 }
 
@@ -307,5 +348,11 @@ export async function checkVault(repository: Repository, credentialSecret?: stri
       credentials: { accessKeyId: creds.accessKey, secretAccessKey: creds.secretKey }
     });
     await client.send(new HeadBucketCommand({ Bucket: bucket }));
+    return;
+  }
+  if (repository.type === "google-drive") {
+    const { ensureGoogleDriveFolder, googleDriveClient } = await googleDriveTools();
+    const drive = googleDriveClient(credentialSecret);
+    await ensureGoogleDriveFolder(drive, repository.location);
   }
 }

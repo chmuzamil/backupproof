@@ -1,6 +1,6 @@
 export type RecipeType = "compose-files" | "postgres" | "mysql" | "docker-compose";
 export type BackupEngine = "frd" | "native" | "restic" | "kopia";
-export type RepositoryType = "local" | "sftp" | "s3" | "b2";
+export type RepositoryType = "local" | "sftp" | "s3" | "b2" | "google-drive";
 export type JobType = "backup" | "check" | "prune" | "restore-test" | "manual-restore" | "dr-run";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 export type NotificationType = "email" | "webhook" | "slack" | "discord" | "telegram" | "pagerduty";
@@ -93,6 +93,9 @@ export interface Job {
   snapshotId?: string;
   requestedSnapshotId?: string;
   restoreTargetDir?: string;
+  restorePaths?: string[];
+  drScenario?: string;
+  restoreVerification?: RestoreVerification;
   error?: string;
 }
 
@@ -100,6 +103,26 @@ export interface ChecksumResult {
   path: string;
   passed: boolean;
   message: string;
+}
+
+export interface RestoreVerification {
+  supported: boolean;
+  checkedAt: string;
+  totalFiles: number;
+  passedFiles: number;
+  failedFiles: number;
+  skippedFiles: number;
+  results: ChecksumResult[];
+}
+
+export interface RestoreDestinationTemplate {
+  id: string;
+  name: string;
+  path: string;
+  description?: string;
+  appId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RestoreProof {
@@ -189,6 +212,7 @@ export interface DashboardState {
   jobs: Job[];
   restoreProofs: RestoreProof[];
   notificationTargets: NotificationTarget[];
+  restoreDestinationTemplates: RestoreDestinationTemplate[];
   alerts: Alert[];
   users: User[];
   auditLog: AuditEntry[];
@@ -212,6 +236,21 @@ export interface AppSummary {
   alerts: Alert[];
   restorable: boolean;
   confidenceScore: number;
+  safety: BackupSafetyStatus;
+  snapshotHistory: Array<{
+    id: string;
+    createdAt: string;
+    sizeBytes: number;
+  }>;
+}
+
+export interface BackupSafetyStatus {
+  safe: boolean;
+  checkedAt: string;
+  estimatedSourceBytes: number;
+  freeBytes?: number;
+  errors: string[];
+  warnings: string[];
 }
 
 export interface SnapshotSummary {
@@ -223,6 +262,49 @@ export interface SnapshotSummary {
   sourcePaths: string[];
   sizeBytes: number;
   shortId?: string;
+}
+
+export interface SnapshotFile {
+  path: string;
+  size: number;
+  modifiedAt: string;
+  sha256: string;
+}
+
+export interface SnapshotContents {
+  snapshotId: string;
+  supported: boolean;
+  files: SnapshotFile[];
+  totalFiles: number;
+  totalBytes: number;
+}
+
+export interface SnapshotComparison {
+  snapshotId: string;
+  previousSnapshotId?: string;
+  supported: boolean;
+  added: SnapshotFile[];
+  modified: SnapshotFile[];
+  deleted: SnapshotFile[];
+}
+
+export interface RestorePreflight {
+  ready: boolean;
+  appId: string;
+  snapshotId: string;
+  targetDir: string;
+  snapshotCreatedAt: string;
+  snapshotSizeBytes: number;
+  proof?: {
+    status: RestoreProof["status"];
+    testedAt: string;
+    expiresAt: string;
+    current: boolean;
+  };
+  targetExists: boolean;
+  targetEntryCount: number;
+  errors: string[];
+  warnings: string[];
 }
 
 export interface DiscoveredPath {
@@ -257,6 +339,35 @@ export interface DiscoveredContainer {
   databaseEngine?: "postgres" | "mysql" | "mariadb";
 }
 
+export type CmsType = "wordpress" | "drupal" | "joomla" | "ghost" | "nextcloud";
+
+export interface DiscoveredCmsApp {
+  id: string;
+  type: CmsType;
+  name: string;
+  source: "docker" | "filesystem";
+  confidence: "high" | "medium";
+  rootPath?: string;
+  contentPath?: string;
+  configPath?: string;
+  composeProject?: string;
+  composeFile?: string;
+  containerName?: string;
+  containerId?: string;
+  image?: string;
+  backupPaths: string[];
+  database?: {
+    engine: "postgres" | "mysql" | "mariadb";
+    host?: string;
+    port?: number;
+    database?: string;
+    username?: string;
+    passwordAvailable?: boolean;
+    source: "config" | "env";
+  };
+  hint: string;
+}
+
 export interface DiscoveredDatabase {
   id: string;
   engine: "postgres" | "mysql" | "mariadb";
@@ -284,6 +395,7 @@ export interface DiscoveryResult {
   paths: DiscoveredPath[];
   services: DiscoveredService[];
   containers: DiscoveredContainer[];
+  cmsApps: DiscoveredCmsApp[];
   databases: DiscoveredDatabase[];
   dockerAvailable: boolean;
   warnings: string[];
@@ -298,4 +410,23 @@ export interface DrReport {
   proofStatus: string;
   confidenceScore: number;
   steps: string[];
+}
+
+export interface DrReportSummary {
+  id: string;
+  appId: string;
+  appName: string;
+  scenario: string;
+  snapshotId: string;
+  restoredAt: string;
+  proofStatus: string;
+  confidenceScore: number;
+  restoreTargetDir?: string;
+  selectedPathCount: number;
+  verification?: {
+    supported: boolean;
+    totalFiles: number;
+    passedFiles: number;
+    failedFiles: number;
+  };
 }

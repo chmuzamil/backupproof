@@ -5,6 +5,8 @@ import path from "node:path";
 import { config } from "./config";
 import { runCommand } from "./shell";
 import type {
+  CmsType,
+  DiscoveredCmsApp,
   DiscoveredContainer,
   DiscoveredDatabase,
   DiscoveredMount,
@@ -62,6 +64,16 @@ export function classifyDatabaseImage(image: string): "postgres" | "mysql" | "ma
   return undefined;
 }
 
+export function classifyCmsImage(image: string): CmsType | undefined {
+  const value = image.toLowerCase();
+  if (/(^|[/:])wordpress([:@]|$)/.test(value)) return "wordpress";
+  if (/(^|[/:])drupal([:@]|$)/.test(value)) return "drupal";
+  if (/(^|[/:])joomla([:@]|$)/.test(value)) return "joomla";
+  if (/(^|[/:])ghost([:@]|$)/.test(value)) return "ghost";
+  if (/(^|[/:])nextcloud([:@]|$)/.test(value)) return "nextcloud";
+  return undefined;
+}
+
 export function parseDockerInspectRecord(raw: unknown): DiscoveredContainer | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as DockerInspectRecord;
@@ -101,6 +113,229 @@ export function parseDockerInspectRecord(raw: unknown): DiscoveredContainer | nu
     suggestedPaths,
     databaseEngine: classifyDatabaseImage(image)
   };
+}
+
+function cmsName(type: CmsType) {
+  return {
+    wordpress: "WordPress",
+    drupal: "Drupal",
+    joomla: "Joomla",
+    ghost: "Ghost",
+    nextcloud: "Nextcloud"
+  }[type];
+}
+
+function splitHostPort(raw: string | undefined, fallbackPort: number) {
+  const value = raw?.trim();
+  if (!value) return { host: undefined, port: fallbackPort };
+  const [host, portText] = value.split(":");
+  const port = Number(portText);
+  return {
+    host: host || undefined,
+    port: Number.isFinite(port) && port > 0 ? port : fallbackPort
+  };
+}
+
+function databaseEngineFromEnv(type: CmsType, env: Record<string, string>): "postgres" | "mysql" | "mariadb" {
+  const haystack = `${env.WORDPRESS_DB_HOST ?? ""} ${env.NEXTCLOUD_DB_TYPE ?? ""} ${env.POSTGRES_HOST ?? ""} ${env.database__client ?? ""}`.toLowerCase();
+  if (/postgres|pgsql/.test(haystack)) return "postgres";
+  if (/mariadb/.test(haystack)) return "mariadb";
+  return type === "ghost" && /postgres/.test(haystack) ? "postgres" : "mysql";
+}
+
+export function cmsDatabaseFromEnv(type: CmsType, env: Record<string, string>): DiscoveredCmsApp["database"] | undefined {
+  const engine = databaseEngineFromEnv(type, env);
+  const defaultPort = engine === "postgres" ? 5432 : 3306;
+  if (type === "wordpress") {
+    if (!env.WORDPRESS_DB_HOST && !env.WORDPRESS_DB_NAME && !env.WORDPRESS_DB_USER) return undefined;
+    const target = splitHostPort(env.WORDPRESS_DB_HOST, defaultPort);
+    return {
+      engine,
+      host: target.host,
+      port: target.port,
+      database: env.WORDPRESS_DB_NAME,
+      username: env.WORDPRESS_DB_USER,
+      passwordAvailable: Boolean(env.WORDPRESS_DB_PASSWORD),
+      source: "env"
+    };
+  }
+  if (type === "drupal") {
+    const target = splitHostPort(env.DRUPAL_DATABASE_HOST ?? env.MYSQL_HOST ?? env.POSTGRES_HOST, defaultPort);
+    const database = env.DRUPAL_DATABASE_NAME ?? env.MYSQL_DATABASE ?? env.POSTGRES_DB;
+    const username = env.DRUPAL_DATABASE_USER ?? env.MYSQL_USER ?? env.POSTGRES_USER;
+    if (!target.host && !database && !username) return undefined;
+    return { engine, host: target.host, port: target.port, database, username, passwordAvailable: Boolean(env.DRUPAL_DATABASE_PASSWORD ?? env.MYSQL_PASSWORD ?? env.POSTGRES_PASSWORD), source: "env" };
+  }
+  if (type === "joomla") {
+    const target = splitHostPort(env.JOOMLA_DB_HOST ?? env.MYSQL_HOST, defaultPort);
+    if (!target.host && !env.JOOMLA_DB_NAME && !env.JOOMLA_DB_USER) return undefined;
+    return { engine, host: target.host, port: target.port, database: env.JOOMLA_DB_NAME, username: env.JOOMLA_DB_USER, passwordAvailable: Boolean(env.JOOMLA_DB_PASSWORD), source: "env" };
+  }
+  if (type === "ghost") {
+    if (!env.database__connection__host && !env.database__connection__database && !env.database__connection__user) return undefined;
+    const ghostEngine = /postgres/i.test(env.database__client ?? "") ? "postgres" : "mysql";
+    const target = splitHostPort(env.database__connection__host, ghostEngine === "postgres" ? 5432 : 3306);
+    return { engine: ghostEngine, host: target.host, port: target.port, database: env.database__connection__database, username: env.database__connection__user, passwordAvailable: Boolean(env.database__connection__password), source: "env" };
+  }
+  const nextcloudEngine = env.POSTGRES_DB || env.POSTGRES_HOST || /postgres/i.test(env.NEXTCLOUD_DB_TYPE ?? "") ? "postgres" : engine;
+  const target = splitHostPort(env.MYSQL_HOST ?? env.POSTGRES_HOST, nextcloudEngine === "postgres" ? 5432 : 3306);
+  const database = env.MYSQL_DATABASE ?? env.POSTGRES_DB;
+  const username = env.MYSQL_USER ?? env.POSTGRES_USER;
+  if (!target.host && !database && !username) return undefined;
+  return { engine: nextcloudEngine, host: target.host, port: target.port, database, username, passwordAvailable: Boolean(env.MYSQL_PASSWORD ?? env.POSTGRES_PASSWORD), source: "env" };
+}
+
+function cmsTargets(type: CmsType) {
+  return {
+    wordpress: { roots: ["/var/www/html", "/bitnami/wordpress"], contents: ["/var/www/html/wp-content", "/bitnami/wordpress/wp-content"], config: "wp-config.php" },
+    drupal: { roots: ["/var/www/html", "/bitnami/drupal"], contents: ["/var/www/html/sites", "/bitnami/drupal/sites"], config: "sites/default/settings.php" },
+    joomla: { roots: ["/var/www/html", "/bitnami/joomla"], contents: ["/var/www/html/images", "/bitnami/joomla/images"], config: "configuration.php" },
+    ghost: { roots: ["/var/lib/ghost"], contents: ["/var/lib/ghost/content"], config: "config.production.json" },
+    nextcloud: { roots: ["/var/www/html"], contents: ["/var/www/html/data", "/var/www/html/config"], config: "config/config.php" }
+  }[type];
+}
+
+function hostPathForDestination(mounts: DiscoveredMount[], destination: string) {
+  const normalizedDestination = path.posix.normalize(destination);
+  for (const mount of mounts) {
+    if (!mount.source || !mount.destination) continue;
+    const mountDestination = path.posix.normalize(mount.destination);
+    if (normalizedDestination === mountDestination) return mount.source;
+    if (normalizedDestination.startsWith(`${mountDestination}/`)) {
+      const relative = normalizedDestination.slice(mountDestination.length + 1).split("/");
+      return mount.source.startsWith("/") ? path.posix.join(mount.source, ...relative) : path.join(mount.source, ...relative);
+    }
+  }
+  return undefined;
+}
+
+export function cmsPathsFromMounts(type: CmsType, mounts: DiscoveredMount[]) {
+  const targets = cmsTargets(type);
+  const rootPath = targets.roots.map((target) => hostPathForDestination(mounts, target)).find(Boolean);
+  const contentPath = targets.contents.map((target) => hostPathForDestination(mounts, target)).find(Boolean);
+  const configPath = rootPath
+    ? rootPath.startsWith("/") ? path.posix.join(rootPath, ...targets.config.split("/")) : path.join(rootPath, ...targets.config.split("/"))
+    : undefined;
+  const allBindMounts = mounts.filter((mount) => mount.type === "bind" && mount.source).map((mount) => mount.source);
+  const pathItems = [rootPath, contentPath, ...allBindMounts].filter((item): item is string => Boolean(item));
+  const backupPaths = uniquePathCandidates(pathItems.map((item) => ({
+    path: item,
+    label: cmsName(type),
+    reason: `${cmsName(type)} files`
+  }))).map((item) => item.path).filter((item, index, items) => {
+    const normalized = path.normalize(item).replace(/[\\/]+$/, "").toLowerCase();
+    return !items.some((other, otherIndex) => {
+      if (otherIndex === index) return false;
+      const parent = path.normalize(other).replace(/[\\/]+$/, "").toLowerCase();
+      return normalized.startsWith(`${parent}${path.sep}`) || normalized.startsWith(`${parent}/`);
+    });
+  });
+  return { rootPath, contentPath, configPath, backupPaths };
+}
+
+function cmsAppsFromContainers(containers: DiscoveredContainer[], rawRecords: DockerInspectRecord[]) {
+  return containers.flatMap((container): DiscoveredCmsApp[] => {
+    const type = classifyCmsImage(container.image);
+    if (!type) return [];
+    const record = rawRecords.find((item) => item.Id === container.id);
+    const env = envFromDockerConfig(record?.Config?.Env);
+    const paths = cmsPathsFromMounts(type, container.mounts);
+    return [{
+      id: `docker-cms-${container.id}`,
+      type,
+      name: container.composeProject ? `${cmsName(type)} (${container.composeProject})` : `${cmsName(type)} (${container.name})`,
+      source: "docker",
+      confidence: "high",
+      rootPath: paths.rootPath,
+      contentPath: paths.contentPath,
+      configPath: paths.configPath,
+      composeProject: container.composeProject,
+      composeFile: container.composeFile,
+      containerName: container.name,
+      containerId: container.id,
+      image: container.image,
+      backupPaths: paths.backupPaths,
+      database: cmsDatabaseFromEnv(type, env),
+      hint: `${cmsName(type)} detected. BackupProof can protect the site files and pair them with a database export.`
+    }];
+  });
+}
+
+export function parseWordPressConfig(contents: string): DiscoveredCmsApp["database"] | undefined {
+  const readDefine = (name: string) => contents.match(new RegExp(`define\\s*\\(\\s*['"]${name}['"]\\s*,\\s*['"]([^'"]+)['"]\\s*\\)`, "i"))?.[1];
+  const database = readDefine("DB_NAME");
+  const username = readDefine("DB_USER");
+  const target = splitHostPort(readDefine("DB_HOST"), 3306);
+  if (!database && !username && !target.host) return undefined;
+  return { engine: "mysql", host: target.host, port: target.port, database, username, passwordAvailable: /DB_PASSWORD/i.test(contents), source: "config" };
+}
+
+async function detectCmsFromFilesystem(paths: DiscoveredPath[]) {
+  const roots = uniquePathCandidates([
+    ...paths.filter((item) => item.exists).map((item) => ({ path: item.path, label: item.label, reason: item.reason })),
+    { path: "C:\\xampp\\htdocs", label: "XAMPP sites", reason: "Common local WordPress folder" },
+    { path: "C:\\wamp64\\www", label: "WAMP sites", reason: "Common local WordPress folder" },
+    { path: "C:\\laragon\\www", label: "Laragon sites", reason: "Common local WordPress folder" },
+    { path: "/var/www", label: "Web sites", reason: "Common web root" },
+    { path: "/srv", label: "Self-hosted data", reason: "Common app folder" }
+  ]);
+  const found: DiscoveredCmsApp[] = [];
+  const markers: Array<{ type: CmsType; file: string }> = [
+    { type: "wordpress", file: "wp-config.php" },
+    { type: "drupal", file: path.join("sites", "default", "settings.php") },
+    { type: "joomla", file: "configuration.php" },
+    { type: "ghost", file: "config.production.json" },
+    { type: "nextcloud", file: path.join("config", "config.php") }
+  ];
+
+  for (const root of roots.slice(0, 12)) {
+    let entries: string[] = [root.path];
+    try {
+      const children = await fs.readdir(root.path, { withFileTypes: true });
+      entries = [root.path, ...children.filter((item) => item.isDirectory()).slice(0, 25).map((item) => path.join(root.path, item.name))];
+    } catch {
+      continue;
+    }
+
+    for (const siteRoot of entries) {
+      for (const marker of markers) {
+        const configPath = path.join(siteRoot, marker.file);
+        try {
+          await fs.access(configPath);
+          const config = marker.type === "wordpress" ? await fs.readFile(configPath, "utf8").catch(() => "") : "";
+          found.push({
+            id: `fs-cms-${marker.type}-${Buffer.from(siteRoot).toString("base64url")}`,
+            type: marker.type,
+            name: `${cmsName(marker.type)} (${path.basename(siteRoot) || siteRoot})`,
+            source: "filesystem",
+            confidence: "high",
+            rootPath: siteRoot,
+            configPath,
+            contentPath: marker.type === "wordpress" ? path.join(siteRoot, "wp-content") : undefined,
+            backupPaths: [siteRoot],
+            database: marker.type === "wordpress" ? parseWordPressConfig(config) : undefined,
+            hint: `${cmsName(marker.type)} files found. BackupProof can protect the full site folder${marker.type === "wordpress" ? " and fill in the database details it can safely read" : ""}.`
+          });
+        } catch {
+          // marker not present
+        }
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return found.filter((item) => {
+    const key = `${item.type}:${path.normalize(item.rootPath ?? item.id).toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function detectCmsApps(containers: DiscoveredContainer[], rawRecords: DockerInspectRecord[], paths: DiscoveredPath[]) {
+  const dockerApps = cmsAppsFromContainers(containers, rawRecords);
+  const fsApps = await detectCmsFromFilesystem(paths);
+  return [...dockerApps, ...fsApps];
 }
 
 export function hostPortFromInspect(record: DockerInspectRecord, containerPort: number) {
@@ -409,6 +644,8 @@ export async function discoverHost(): Promise<DiscoveryResult> {
   const dockerOk = await dockerAvailable();
   const { containers, rawRecords } = dockerOk ? await detectDockerContainers(warnings) : { containers: [], rawRecords: [] };
   const databases = await detectDatabases(containers, rawRecords, warnings);
+  const visiblePaths = paths.filter((item) => item.exists).sort((a, b) => Number(b.recommended) - Number(a.recommended));
+  const cmsApps = await detectCmsApps(containers, rawRecords, visiblePaths);
 
   return {
     checkedAt: new Date().toISOString(),
@@ -418,9 +655,10 @@ export async function discoverHost(): Promise<DiscoveryResult> {
     },
     defaultAppName: "My important files",
     defaultVaultPath: path.join(config.dataDir, "discovered-vault"),
-    paths: paths.filter((item) => item.exists).sort((a, b) => Number(b.recommended) - Number(a.recommended)),
+    paths: visiblePaths,
     services,
     containers,
+    cmsApps,
     databases,
     dockerAvailable: dockerOk,
     warnings

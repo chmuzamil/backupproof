@@ -5,7 +5,7 @@ import { config } from "../../config";
 import { decryptSecret } from "../../crypto";
 import type { App, Policy, Repository } from "../../../shared/types";
 import type { BackupEngineAdapter, EngineContext, EngineSnapshot, PruneResult } from "../types";
-import { decryptChunk, encryptChunk } from "./chunkCrypto";
+import { decryptChunk, encryptChunk, sha256Buffer } from "./chunkCrypto";
 import { buildManifest, diffManifest, type FrdSnapshotMeta, type ManifestEntry } from "./manifest";
 import {
   appVaultPrefix,
@@ -108,8 +108,13 @@ async function frdBackup(app: App, repository: Repository, sourcePaths: string[]
     const raw = await readFileForEntry(resolvedPaths, entry);
     const encrypted = encryptChunk(password, raw);
     await writeChunk(repository, app.id, entry.chunk, encrypted, ctx.credentialSecret);
+    const stored = await readChunk(repository, app.id, entry.chunk, ctx.credentialSecret);
+    const verified = decryptChunk(password, stored);
+    if (sha256Buffer(verified) !== entry.sha256) {
+      throw new Error(`Integrity verification failed for ${entry.path}`);
+    }
     sizeBytes += encrypted.length;
-    onLine(`Stored encrypted chunk ${entry.chunk}`);
+    onLine(`Stored and verified encrypted chunk ${entry.chunk}`);
   }
 
   const parent = (await listSnapshotsInternal(app, repository, ctx)).find((s) => s.format === "frd-v1");
@@ -144,7 +149,7 @@ async function frdRestore(app: App, repository: Repository, snapshotId: string, 
 
   const password = repoPassword(ctx, onLine);
   const files = options?.paths?.length
-    ? meta.files?.filter((f) => options.paths!.some((p) => f.path.includes(p))) ?? []
+    ? meta.files?.filter((f) => options.paths!.some((p) => f.path === p || f.path.startsWith(`${p.replace(/\/$/, "")}/`))) ?? []
     : meta.files ?? [];
 
   onLine(`Restoring FRD snapshot ${snapshotId} (${files.length} files)`);
@@ -190,8 +195,8 @@ async function frdPrune(app: App, repository: Repository, policy: Policy, onLine
 
 export const frdEngine: BackupEngineAdapter = {
   backup(app, repository, sourcePaths, onLine, ctx) {
-    if (!["local", "sftp", "s3", "b2"].includes(repository.type)) {
-      throw new Error(`FRD engine supports local, sftp, s3, and b2 vaults. Got: ${repository.type}`);
+    if (!["local", "sftp", "s3", "b2", "google-drive"].includes(repository.type)) {
+      throw new Error(`FRD engine supports local, sftp, s3, b2, and Google Drive vaults. Got: ${repository.type}`);
     }
     return frdBackup(app, repository, sourcePaths, onLine, ctx);
   },

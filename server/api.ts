@@ -1,4 +1,9 @@
 import express from "express";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import path from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { v4 as uuid } from "uuid";
 import {
   agentRegisterSchema,
@@ -8,12 +13,14 @@ import {
   notificationInputSchema,
   policyInputSchema,
   repositoryInputSchema,
+  restoreDestinationTemplateInputSchema,
   userInputSchema
 } from "../shared/schemas";
 import { deleteAllSnapshots, deleteApp } from "./appMaintenance";
 import { auditExport, recordAudit } from "./auditLog";
 import { auditAlerts } from "./alertAudit";
 import { authMiddleware, createSession, destroySession, requireRole, verifyPassword } from "./auth";
+import { inspectBackupSafetyCached } from "./backupSafety";
 import { config } from "./config";
 import { enrichSummary } from "./confidenceScore";
 import { checkEnvironment } from "./environment";
@@ -22,8 +29,16 @@ import { ensureDemoApp } from "./demo";
 import { discoverHost } from "./discovery";
 import { getEngineAdapter } from "./engines";
 import { heartbeatAgent, registerAgent } from "./fleet";
+import { consumeGoogleDriveConnection, finishGoogleDriveOAuth, startGoogleDriveOAuth } from "./googleDrive";
 import { JobRunner } from "./jobs";
 import { openApiSpec } from "./openapi";
+import { createPortableExport } from "./portableExport";
+import { restorePortableExport } from "./portableImport";
+import { createRecoveryKit, openRecoveryKit } from "./recoveryKit";
+import { listDrReports, readDrReport } from "./proofReport";
+import { buildRecoveryRunbook, createEvidenceBundle } from "./recoveryEvidence";
+import { inspectRestorePreflight } from "./restorePreflight";
+import { compareSnapshots, inspectSnapshotContents } from "./snapshotInspector";
 import { Store } from "./store";
 import type { AppSummary, SnapshotSummary, User } from "../shared/types";
 
@@ -51,6 +66,31 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
 
   router.get("/docs/openapi.json", (_req, res) => {
     res.json(openApiSpec);
+  });
+
+  router.get("/google-drive/oauth/callback", async (req, res, next) => {
+    try {
+      const state = String(req.query.state ?? "");
+      const code = String(req.query.code ?? "");
+      if (!state || !code) throw new Error("Google Drive authorization was cancelled or incomplete.");
+      const connectionId = await finishGoogleDriveOAuth(state, code);
+      res.type("html").send(`<!doctype html><html><body><p>Google Drive connected. You can close this window.</p><script>window.opener?.postMessage(${JSON.stringify({ type: "backupproof-google-drive", connectionId })}, "*");window.close();</script></body></html>`);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/google-drive/oauth/start", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const clientId = String(req.body?.clientId ?? "").trim();
+      const clientSecret = String(req.body?.clientSecret ?? "").trim();
+      if (!clientId || !clientSecret) throw new Error("Google OAuth client ID and client secret are required.");
+      const redirectUri = `${req.protocol}://${req.get("host")}/api/google-drive/oauth/callback`;
+      res.json({ authorizationUrl: startGoogleDriveOAuth({ clientId, clientSecret, redirectUri }), redirectUri });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/auth/login", async (req, res, next) => {
@@ -135,7 +175,13 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
       const input = repositoryInputSchema.parse({ ...req.body, engine: "restic" });
       if (!input.password) throw new Error("Restic repository password is required");
       const passwordSecretId = await store.putSecret(input.password);
-      const credentialSecretId = input.credentials ? await store.putSecret(input.credentials) : undefined;
+      const googleCredentials = consumeGoogleDriveConnection(input.googleConnectionId);
+      if (input.type === "google-drive" && !googleCredentials) {
+        throw new Error("Connect Google Drive before creating this vault.");
+      }
+      const credentialSecretId = googleCredentials
+        ? await store.putSecret(googleCredentials)
+        : input.credentials ? await store.putSecret(input.credentials) : undefined;
       const repository = await store.upsertRepository({
         name: input.name,
         engine: "restic",
@@ -202,6 +248,9 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
           })
         : [];
       const recentFailures = jobs.filter((j) => j.status === "failed").length;
+      const repositories = [repository, ...(app.secondaryRepositoryIds ?? []).map((id) => state.repositories.find((repo) => repo.id === id))]
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+      const safety = await inspectBackupSafetyCached(app, repositories);
       return enrichSummary({
         app,
         repository,
@@ -214,7 +263,13 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
           ? { id: snapshots[0].id, createdAt: snapshots[0].createdAt, sizeBytes: snapshots[0].sizeBytes }
           : undefined,
         alerts: state.alerts.filter((alert) => alert.appId === app.id && !alert.acknowledgedAt),
-        restorable: Boolean(proofFresh)
+        restorable: Boolean(proofFresh),
+        safety,
+        snapshotHistory: snapshots.slice(0, 12).reverse().map((snapshot) => ({
+          id: snapshot.id,
+          createdAt: snapshot.createdAt,
+          sizeBytes: snapshot.sizeBytes
+        }))
       }, recentFailures);
     }));
     res.json(summaries);
@@ -328,6 +383,31 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.post("/restore-destinations", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const input = restoreDestinationTemplateInputSchema.parse(req.body);
+      const template = await store.upsertRestoreDestinationTemplate(input);
+      await recordAudit(store, "restore-destination.save", `Saved restore destination ${template.name}`, req.user);
+      broadcast();
+      res.status(201).json(template);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/restore-destinations/:id", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const template = await store.removeRestoreDestinationTemplate(req.params.id);
+      await recordAudit(store, "restore-destination.delete", `Deleted restore destination ${template.name}`, req.user);
+      broadcast();
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/apps/:id/jobs/:type", auth, async (req, res, next) => {
     try {
       if (req.user) requireRole(req.user.role, "write");
@@ -407,6 +487,139 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.get("/apps/:id/snapshots/:snapshotId/download", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const repository = state.repositories.find((item) => item.id === app.repositoryId);
+      if (!repository) throw new Error("App repository not found");
+      const adapter = getEngineAdapter(repository.engine);
+      const exported = await createPortableExport(app, repository, req.params.snapshotId, adapter, {
+        passwordSecret: store.getSecret(repository.passwordSecretId),
+        credentialSecret: store.getSecret(repository.credentialSecretId)
+      });
+      await recordAudit(store, "snapshot.download", `Downloaded portable backup for ${app.name} snapshot ${req.params.snapshotId}`, req.user);
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", `attachment; filename="${exported.fileName}"`);
+      const stream = fs.createReadStream(exported.filePath);
+      stream.on("error", async (error) => {
+        await exported.cleanup();
+        next(error);
+      });
+      res.on("finish", () => void exported.cleanup());
+      res.on("close", () => {
+        if (!res.writableFinished) void exported.cleanup();
+      });
+      stream.pipe(res);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/snapshots/:snapshotId/contents", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const repository = state.repositories.find((item) => item.id === app.repositoryId);
+      if (!repository) throw new Error("App repository not found");
+      res.json(await inspectSnapshotContents(app, repository, req.params.snapshotId, {
+        passwordSecret: store.getSecret(repository.passwordSecretId),
+        credentialSecret: store.getSecret(repository.credentialSecretId)
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/snapshots/:snapshotId/compare", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const repository = state.repositories.find((item) => item.id === app.repositoryId);
+      if (!repository) throw new Error("App repository not found");
+      res.json(await compareSnapshots(app, repository, req.params.snapshotId, {
+        passwordSecret: store.getSecret(repository.passwordSecretId),
+        credentialSecret: store.getSecret(repository.credentialSecretId)
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/portable/import", auth, async (req, res, next) => {
+    const archivePath = path.join(config.dataDir, "incoming", `portable-${uuid()}.tar.gz`);
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const contentLength = Number(req.headers["content-length"] ?? 0);
+      if (contentLength > config.nativeEngineMaxBytes) throw new Error("Portable backup exceeds the configured upload size limit.");
+      await fsPromises.mkdir(path.dirname(archivePath), { recursive: true });
+      let received = 0;
+      const limit = new Transform({
+        transform(chunk, _encoding, callback) {
+          received += chunk.length;
+          callback(received > config.nativeEngineMaxBytes ? new Error("Portable backup exceeds the configured upload size limit.") : undefined, chunk);
+        }
+      });
+      await pipeline(req, limit, fs.createWriteStream(archivePath));
+      const targetDir = typeof req.headers["x-restore-target"] === "string" ? req.headers["x-restore-target"] : undefined;
+      const result = await restorePortableExport(archivePath, targetDir);
+      await recordAudit(store, "portable.import", `Imported portable backup for ${result.metadata.app.name} snapshot ${result.metadata.snapshotId}`, req.user);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    } finally {
+      await fsPromises.rm(archivePath, { force: true });
+    }
+  });
+
+  router.post("/recovery-kit/export", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "admin");
+      const passphrase = String(req.body?.passphrase ?? "");
+      const kit = createRecoveryKit(store.exportRecoveryState(), passphrase);
+      await recordAudit(store, "recovery-kit.export", "Exported encrypted BackupProof recovery kit", req.user);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", `attachment; filename="backupproof-recovery-${new Date().toISOString().slice(0, 10)}.bpkit"`);
+      res.send(kit);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/recovery-kit/import", auth, async (req, res, next) => {
+    const kitPath = path.join(config.dataDir, "incoming", `recovery-kit-${uuid()}.bpkit`);
+    try {
+      if (req.user) requireRole(req.user.role, "admin");
+      const passphrase = typeof req.headers["x-recovery-passphrase"] === "string" ? req.headers["x-recovery-passphrase"] : "";
+      await fsPromises.mkdir(path.dirname(kitPath), { recursive: true });
+      let received = 0;
+      const limit = new Transform({
+        transform(chunk, _encoding, callback) {
+          received += chunk.length;
+          callback(received > 50 * 1024 * 1024 ? new Error("Recovery kit exceeds the 50 MB limit.") : undefined, chunk);
+        }
+      });
+      await pipeline(req, limit, fs.createWriteStream(kitPath));
+      const payload = openRecoveryKit(await fsPromises.readFile(kitPath), passphrase);
+      const restoredState = await store.importRecoveryState(payload);
+      await recordAudit(store, "recovery-kit.import", `Imported recovery kit exported at ${payload.exportedAt}`, req.user);
+      broadcast();
+      res.status(201).json({
+        exportedAt: payload.exportedAt,
+        apps: restoredState.apps.length,
+        repositories: restoredState.repositories.length,
+        policies: restoredState.policies.length
+      });
+    } catch (error) {
+      next(error);
+    } finally {
+      await fsPromises.rm(kitPath, { force: true });
+    }
+  });
+
   router.get("/apps/:id/proof-report", auth, async (req, res, next) => {
     try {
       const proof = store.snapshot().restoreProofs.find((p) => p.appId === req.params.id);
@@ -417,12 +630,49 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.get("/apps/:id/proof-history", auth, async (req, res, next) => {
+    try {
+      const proofs = store.snapshot().restoreProofs
+        .filter((proof) => proof.appId === req.params.id)
+        .sort((a, b) => b.testedAt.localeCompare(a.testedAt));
+      res.json(proofs);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/apps/:id/restore-preflight", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const repository = state.repositories.find((item) => item.id === app.repositoryId);
+      if (!repository) throw new Error("App repository not found");
+      const snapshotId = typeof req.body?.snapshotId === "string" ? req.body.snapshotId : "";
+      const targetDir = typeof req.body?.targetDir === "string" ? req.body.targetDir : undefined;
+      const snapshot = (await getEngineAdapter(repository.engine).listSnapshots(app, repository, {
+        passwordSecret: store.getSecret(repository.passwordSecretId),
+        credentialSecret: store.getSecret(repository.credentialSecretId)
+      })).find((item) => item.id === snapshotId);
+      const proof = state.restoreProofs.find((item) => item.appId === app.id && item.snapshotId === snapshotId);
+      res.json(await inspectRestorePreflight({
+        app,
+        snapshot: snapshot ? { ...snapshot, appId: app.id, appName: app.name } : undefined,
+        proof,
+        targetDir
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/apps/:id/restore", auth, async (req, res, next) => {
     try {
       if (req.user) requireRole(req.user.role, "write");
       const snapshotId = typeof req.body?.snapshotId === "string" ? req.body.snapshotId : undefined;
       const restoreTargetDir = typeof req.body?.targetDir === "string" ? req.body.targetDir : undefined;
-      const job = await runner.enqueue("manual-restore", req.params.id, { requestedSnapshotId: snapshotId, restoreTargetDir });
+      const restorePaths = Array.isArray(req.body?.paths) ? req.body.paths.filter((item: unknown): item is string => typeof item === "string" && item.length > 0).slice(0, 1000) : undefined;
+      const job = await runner.enqueue("manual-restore", req.params.id, { requestedSnapshotId: snapshotId, restoreTargetDir, restorePaths });
       broadcast();
       res.status(202).json(job);
     } catch (error) {
@@ -434,13 +684,74 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     try {
       if (req.user) requireRole(req.user.role, "write");
       const input = drRunSchema.parse(req.body ?? {});
+      const restorePaths = Array.isArray(req.body?.paths) ? req.body.paths.filter((item: unknown): item is string => typeof item === "string" && item.length > 0).slice(0, 1000) : undefined;
       const job = await runner.enqueue("dr-run", req.params.id, {
         requestedSnapshotId: input.snapshotId,
-        restoreTargetDir: input.targetDir ?? input.scenario
+        restoreTargetDir: input.targetDir,
+        restorePaths,
+        drScenario: input.scenario
       });
       await recordAudit(store, "dr.run", `DR run (${input.scenario}) for app ${req.params.id}`, req.user);
       broadcast();
       res.status(202).json(job);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/dr-reports", auth, async (req, res, next) => {
+    try {
+      res.json(await listDrReports(req.params.id));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/dr-reports/:reportId/download", auth, async (req, res, next) => {
+    try {
+      const body = await readDrReport(req.params.id, req.params.reportId);
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${req.params.reportId}.json"`);
+      res.send(body);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/runbook/download", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const body = await buildRecoveryRunbook(state, app);
+      await recordAudit(store, "runbook.download", `Downloaded recovery runbook for ${app.name}`, req.user);
+      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="backupproof-runbook-${app.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || app.id}.md"`);
+      res.send(body);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/apps/:id/evidence-bundle/download", auth, async (req, res, next) => {
+    try {
+      const state = store.snapshot();
+      const app = state.apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+      const bundle = await createEvidenceBundle(state, app);
+      await recordAudit(store, "evidence-bundle.download", `Downloaded recovery evidence bundle for ${app.name}`, req.user);
+      res.setHeader("Content-Type", "application/gzip");
+      res.setHeader("Content-Disposition", `attachment; filename="${bundle.fileName}"`);
+      const stream = fs.createReadStream(bundle.filePath);
+      stream.on("error", async (error) => {
+        await bundle.cleanup();
+        next(error);
+      });
+      res.on("finish", () => void bundle.cleanup());
+      res.on("close", () => {
+        if (!res.writableFinished) void bundle.cleanup();
+      });
+      stream.pipe(res);
     } catch (error) {
       next(error);
     }
