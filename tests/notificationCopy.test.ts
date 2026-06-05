@@ -22,5 +22,6 @@ describe("notification copy", () => {
 
   it("maps known alert titles", () => {
     expect(friendlyAlertTitle("Repository unreachable")).toBe("Backup storage could not be reached");
+    expect(friendlyAlertTitle("restore-test failed")).toBe("Recovery check failed");
   });
 });

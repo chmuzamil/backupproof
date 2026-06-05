@@ -23,12 +23,22 @@ BackupProof is designed for both non-technical and technical self-hosters:
 
 ## Current Version
 
+**v13.1.0** polishes the dashboard shell and notification UX on top of v13:
+
+- **Unified top bar** — page title and subtitle in the header (no duplicate titles on each page), sticky frosted bar, compact status toolbar
+- **Mobile navigation** — hamburger menu, slide-in sidebar, and responsive layouts across Dashboard, Protect data, Alerts, Profile, and Recovery
+- **Single Backup health panel** — one summary at the top with stats, next action, and **Show history** (no duplicate per-card history charts)
+- **Technical details simplified** — backup cards keep metadata only; restore-test trends live in the shared history section
+- **Job failure toasts** — auto-dismissing toast when a job fails (for example recovery check failed); full alerts remain on the Alerts page
+- **First-run wizard polish** — clearer spacing, step labels, and consistent primary/secondary buttons
+- **Friendlier job alert titles** — “Recovery check failed” instead of raw `restore-test failed`
+
 **v13.0.0** adds sign-in, profile management, and a simpler dashboard for non-technical users:
 
 - **Login and sessions** — sign-in screen when `FRD_AUTH_ENABLED=true`, default admin bootstrap, optional OIDC SSO, sign out
 - **Profile page** — change your password and manage users (admin: add, change roles, delete)
 - **`.env` support** — load config from project root; Docker Compose uses `env_file: .env`
-- **Simpler dashboard** — plain-language “At a glance” status, compact collapsed **Backup health** section (charts and history behind “View backup history”)
+- **Simpler dashboard** — plain-language backup health status with charts and history behind **Show history**
 - **Immutable storage UI** — optional object lock toggle for S3 and Backblaze B2 vaults
 - **Friendlier validation** — readable password and form errors instead of raw JSON
 
@@ -50,7 +60,10 @@ BackupProof treats a backup as ready only after it has been restored and checked
 - Shows the last backup and last recovery check in plain language
 - Highlights items that need attention first
 - Gives one clear next step via Recovery Coach
-- Keeps charts, confidence scores, and technical details collapsed or behind expandable sections
+- **Backup health** at the top — headline, stats, next action, and optional history in one panel
+- Keeps technical metadata on each card behind **Technical details**
+- Auto-dismissing toasts when jobs fail; persistent alerts on the Alerts page
+- Mobile-friendly layout with hamburger navigation on small screens
 - Moves the activity log to the bottom of the page
 
 ### Profile (when sign-in is enabled)
@@ -77,11 +90,14 @@ It gives a readiness score, one best next step, and deep-links into storage and 
 
 ### Backup Health (Dashboard)
 
-When items are protected, the Dashboard shows a compact **Backup health** summary:
+When items are protected, the Dashboard shows one **Backup health** panel at the top:
 
-- Plain-language headline (for example, “All your backups are ready to restore”)
-- Ready count and time since the last restore test
-- **View backup history** expands 30/90-day charts, per-item status, practice recoveries, and report download
+- Plain-language headline (for example, “Your backup is ready to restore”)
+- Stats: ready count, need attention, protected, and time since the last restore test
+- **Do this next** action when something needs fixing
+- **Show history** expands 30/90-day restore-test charts, per-item save/test log, practice recoveries, and report download
+
+Per-app cards no longer duplicate history charts; open **Technical details** on a card for snapshot IDs and storage metadata only.
 
 A **weekly recovery summary** email is sent every Monday morning to enabled email targets. You can also send it manually from **Notifications**.
 
@@ -480,7 +496,7 @@ npm run build
 npm audit --omit=dev
 ```
 
-Current local status after the v13 release:
+Current local status after the v13.1 release:
 
 - 28 test files passing
 - 77 tests passing

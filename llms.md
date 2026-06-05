@@ -22,7 +22,7 @@ BackupProof started as a wrapper concept around tools like restic and Kopia, but
 
 The product is currently focused on single-server self-hosted use. Kubernetes, multi-host orchestration, and remote agents are future directions.
 
-**Current release:** v13.x with login UI, Profile page (password + user management), `.env` config loading, simplified dashboard copy, collapsed backup health analytics, immutable storage toggle for S3/B2, and friendly validation errors.
+**Current release:** v13.1.x — unified top bar (page titles in header, no duplicate h2 on pages), mobile hamburger nav, single **Backup health** panel on Dashboard (stats + **Show history**), auto-dismissing job-failure toasts, first-run wizard polish, friendly job alert titles. v13.0 adds login UI, Profile page, `.env` loading, immutable S3/B2 toggle, and friendly validation errors.
 
 ## Main Pages
 
@@ -31,12 +31,22 @@ The product is currently focused on single-server self-hosted use. Kubernetes, m
 The Dashboard shows:
 
 - Recovery Coach checklist with one best next step
-- **At a glance** status in plain language (ready vs needs attention)
+- **Backup health** panel at the top — headline, summary, stats (ready / attention / protected / since last test), optional **Do this next** card
+- **Show history** (collapsed by default) — 30/90-day restore-test chart, per-item save and test log, practice recoveries, report download
 - Protected backup cards with simple timing (“Last saved … · Last tested …”)
-- Compact **Backup health** summary at the bottom (collapsed by default; expand for charts and history)
-- An activity log on the right / bottom
+- **Technical details** on each card — snapshot count, backup point ID, storage, checks (no per-card history charts)
+- Activity log on the right / bottom
 
-Technical metrics (confidence %, drill timelines, bar charts) stay behind **View backup history**. Assume non-technical users never expand that section unless they ask.
+Do not duplicate history UI on cards. One history section only.
+
+When a job fails, a bottom-right toast auto-dismisses after ~4.5s (for example “Recovery check failed”). Persistent alerts live on the **Alerts** page.
+
+### App shell / navigation
+
+- Sidebar: BackupProof branding and main nav
+- Top bar: current page title + subtitle, system status, alert count, account, sign out
+- Mobile: hamburger opens slide-in sidebar with backdrop; body scroll locked while open
+- Page routes do not repeat the page title in the body (subtitle only in top bar)
 
 ### Protect Data
 
@@ -65,6 +75,8 @@ Controls backup and recovery-check timing, retention, and related policy choices
 
 Email, Slack, Discord, Telegram, webhook, and PagerDuty targets. Includes send-test alerts, friendly templates, weekly recovery summary email (Mondays), and coach deep-link into alert setup. Does **not** include password or user management — that lives on **Profile**.
 
+Job failures create alerts with friendly titles (for example “Recovery check failed” not `restore-test failed`).
+
 ### Profile
 
 Visible when `FRD_AUTH_ENABLED=true` and the user is signed in.
@@ -88,6 +100,10 @@ When `FRD_AUTH_ENABLED=true`:
 
 Config loads from `.env` in project root via `server/loadEnv.ts`. See `.env.example`.
 
+### First-run wizard
+
+Modal shown when no apps are protected and user has not dismissed it. Three steps: protect data, run demo, set up alerts. Styled with step numbers, icon badges, primary/secondary buttons.
+
 ## Backup And Recovery Concepts
 
 ### Built-In Backup Engine
@@ -107,9 +123,11 @@ The green check does not mean "a backup job succeeded." It means the latest elig
 - Use plain language first.
 - Prefer "Protect data", "Check recovery", "Recover files", "Ready to restore", and "Download a copy" over technical labels.
 - Avoid leading with "confidence score", "analytics", "drill", or "proof" in primary UI copy.
-- Keep advanced details behind accordions, collapsed sections, or **View backup history**.
+- Keep advanced details behind accordions, collapsed sections, or **Show history**.
 - Give one clear next action when possible.
 - Assume users may not know what Docker, mounts, cron, snapshots, or database dumps mean.
+- One page title in the top bar — do not add duplicate headings in page body.
+- Flash banners and job toasts auto-dismiss; use Alerts page for persistent problems.
 
 ## Important Security Principles
 
@@ -122,15 +140,18 @@ The green check does not mean "a backup job succeeded." It means the latest elig
 
 ## Key Code Areas
 
-- `src/main.tsx` — Dashboard, wizards, most pages
+- `src/main.tsx` — App shell, top bar, Dashboard, wizards, FlashBanner, job-failure toast, Backup health panel
 - `src/auth.tsx` — Login screen, session token, role helpers
 - `src/profile.tsx` — Password change and user management UI
 - `src/storageSetup.tsx` — Storage presets and second-copy modal
+- `src/styles.css` — Layout, top bar, mobile nav, first-run modal, toast host
 - `server/api.ts` — REST routes including auth and users
 - `server/auth.ts` — Password hashing, sessions, RBAC
+- `server/jobs.ts` — Job runner; creates friendly-titled alerts on failure
 - `server/loadEnv.ts` — `.env` file loading
 - `shared/schemas.ts` — Zod validation (`MIN_PASSWORD_LENGTH = 5`)
 - `shared/validation.ts` — Friendly Zod error formatting
+- `shared/notificationCopy.ts` — Friendly alert titles including job failure labels
 - `shared/recoveryAnalytics.ts` — Analytics data + plain-language health copy
 - `tests/` — Vitest test suite
 

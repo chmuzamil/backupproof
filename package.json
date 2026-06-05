@@ -1,6 +1,6 @@
 {
   "name": "friendly-restore-dashboard",
-  "version": "13.0.0",
+  "version": "13.1.0",
   "description": "BackupProof — Every backup earns its trust. Self-hosted verified backups with automatic restore proof.",
   "license": "MIT",
   "private": true,

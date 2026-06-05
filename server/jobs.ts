@@ -10,6 +10,7 @@ import { sendAlert } from "./notifications";
 import { Store } from "./store";
 import { backupPathsForApp, prepareDatabaseDump, prepareDockerCompose, runHealthCheck } from "./recipes";
 import type { App, Job, JobType, Repository } from "../shared/types";
+import { friendlyJobAlertTitle } from "../shared/notificationCopy";
 
 export class JobRunner {
   private activeCount = 0;
@@ -292,7 +293,7 @@ export class JobRunner {
       const alert = await this.store.addAlert({
         appId: job?.appId,
         severity: "critical",
-        title: `${job?.type ?? "Job"} failed`,
+        title: friendlyJobAlertTitle(job?.type ?? "job"),
         message: error
       });
       const targets = this.store.snapshot().notificationTargets;

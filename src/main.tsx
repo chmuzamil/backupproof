@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
   HardDrive,
   LifeBuoy,
   LogIn,
+  Menu,
   Play,
   Scissors,
   RotateCcw,
@@ -34,7 +35,7 @@ import {
   User,
   XCircle
 } from "lucide-react";
-import type { Alert, AppSummary, AuthStatus, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
+import type { Alert, AppSummary, AuthStatus, AuthUser, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
 import { brand } from "../shared/brand";
 import { formatDaysSince, recoveryHealthHeadline, recoveryHealthSummary, type RecoveryAnalytics } from "../shared/recoveryAnalytics";
 import { readinessAdvice, readinessCounts, type ReadinessState } from "../shared/readiness";
@@ -177,25 +178,30 @@ function bytes(value?: number) {
 
 const FLASH_DURATION_MS = 4500;
 
-function useFlashMessage(durationMs = FLASH_DURATION_MS) {
-  const [message, setMessage] = useState("");
-  useEffect(() => {
-    if (!message) return;
-    const timer = window.setTimeout(() => setMessage(""), durationMs);
-    return () => window.clearTimeout(timer);
-  }, [message, durationMs]);
-  return [message, setMessage] as const;
+function useFlashMessage() {
+  return useState("");
 }
 
 function FlashBanner({
   message,
   onDismiss,
-  variant = "info"
+  variant = "info",
+  autoDismissMs = FLASH_DURATION_MS
 }: {
   message: string;
   onDismiss: () => void;
   variant?: "info" | "danger" | "warning";
+  autoDismissMs?: number;
 }) {
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (!message || autoDismissMs <= 0) return;
+    const timer = window.setTimeout(() => onDismissRef.current(), autoDismissMs);
+    return () => window.clearTimeout(timer);
+  }, [message, autoDismissMs]);
+
   if (!message) return null;
   return (
     <div className={`banner flash ${variant}`} role="status">
@@ -205,6 +211,34 @@ function FlashBanner({
       </button>
     </div>
   );
+}
+
+function friendlyJobFailureLabel(type: JobType) {
+  return {
+    backup: "Backup",
+    check: "Storage check",
+    prune: "Cleanup",
+    "restore-test": "Recovery check",
+    "manual-restore": "File recovery",
+    "dr-run": "Recovery practice"
+  }[type];
+}
+
+function useJobFailureToast(jobs: Job[]) {
+  const [message, setMessage] = useState("");
+  const notifiedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    for (const job of jobs) {
+      if (job.status !== "failed") continue;
+      if (notifiedRef.current.has(job.id)) continue;
+      notifiedRef.current.add(job.id);
+      const label = friendlyJobFailureLabel(job.type);
+      setMessage(job.error ? `${label} failed — ${job.error}` : `${label} failed`);
+    }
+  }, [jobs]);
+
+  return [message, () => setMessage("")] as const;
 }
 
 function BrandWordmark({ compact }: { compact?: boolean }) {
@@ -233,6 +267,28 @@ function SidebarBrand() {
 const FIRST_RUN_KEY = "backupproof.firstRunDismissed";
 const REPORT_KEY = "backupproof.reportDownloaded";
 
+type AppPage = "dashboard" | "protect" | "recovery" | "schedule" | "alerts" | "settings" | "profile";
+
+const PAGE_META: Record<AppPage, { title: string; subtitle: string }> = {
+  dashboard: { title: "Dashboard", subtitle: "See what is protected and what to do next." },
+  protect: { title: "Protect data", subtitle: "Choose what to back up, where copies live, and how recovery is checked." },
+  recovery: { title: "Recovery", subtitle: "Restore files or practice getting data back." },
+  schedule: { title: "Schedule", subtitle: "When backups and checks should run." },
+  alerts: { title: "Alerts", subtitle: "Review problems and acknowledge them when handled." },
+  settings: { title: "Notifications", subtitle: "Email and chat alerts when something fails." },
+  profile: { title: "Profile", subtitle: "Change your password or manage dashboard users." }
+};
+
+const NAV_ITEMS: { page: AppPage; label: string; icon: React.ReactNode; authOnly?: boolean }[] = [
+  { page: "dashboard", label: "Dashboard", icon: <HardDrive /> },
+  { page: "protect", label: "Protect data", icon: <ShieldCheck /> },
+  { page: "recovery", label: "Recovery", icon: <LifeBuoy /> },
+  { page: "schedule", label: "Schedule", icon: <CalendarClock /> },
+  { page: "alerts", label: "Alerts", icon: <AlertTriangle /> },
+  { page: "settings", label: "Notifications", icon: <Bell /> },
+  { page: "profile", label: "Profile", icon: <User />, authOnly: true }
+];
+
 function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [state, setState] = useState<DashboardState | null>(null);
@@ -241,10 +297,31 @@ function App() {
   const [secondStorageAppId, setSecondStorageAppId] = useState<string | null>(null);
   const [focusAlertsSetup, setFocusAlertsSetup] = useState(false);
   const [showFirstRun, setShowFirstRun] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [error, setError] = useState<string>();
 
   const currentUser = authStatus?.user ?? null;
   const writeAccess = canWrite(currentUser?.role);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [navOpen]);
+
+  function goToPage(page: AppPage) {
+    setActive(page);
+    setNavOpen(false);
+    if (page !== "settings") setFocusAlertsSetup(false);
+  }
 
   async function loadAuthStatus() {
     try {
@@ -277,6 +354,7 @@ function App() {
     }
     if (task?.id === "offsite-copy") {
       setActive("dashboard");
+      setNavOpen(false);
       const candidate = state?.apps.find((app) => !(app.secondaryRepositoryIds?.length)) ?? state?.apps[0];
       setSecondStorageAppId(candidate?.id ?? null);
       return;
@@ -284,9 +362,11 @@ function App() {
     if (task?.id === "alerts") {
       setFocusAlertsSetup(true);
       setActive("settings");
+      setNavOpen(false);
       return;
     }
     setActive(route);
+    setNavOpen(false);
   }
 
   function dismissFirstRun() {
@@ -297,12 +377,14 @@ function App() {
   function startFirstRunProtect() {
     dismissFirstRun();
     setActive("protect");
+    setNavOpen(false);
   }
 
   function startFirstRunAlerts() {
     dismissFirstRun();
     setFocusAlertsSetup(true);
     setActive("settings");
+    setNavOpen(false);
   }
 
   async function refresh() {
@@ -362,6 +444,7 @@ function App() {
   }, [active]);
 
   const latestJobs = useMemo(() => state?.jobs.slice(0, 8) ?? [], [state]);
+  const [jobToast, clearJobToast] = useJobFailureToast(state?.jobs ?? []);
 
   if (!authStatus) {
     return (
@@ -386,47 +469,56 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell${navOpen ? " nav-open" : ""}`}>
+      <button
+        type="button"
+        className="sidebar-backdrop"
+        aria-label="Close menu"
+        onClick={() => setNavOpen(false)}
+      />
+      <aside className={`sidebar${navOpen ? " open" : ""}`} aria-label="Main navigation">
         <SidebarBrand />
-        <button className={active === "dashboard" ? "nav active" : "nav"} onClick={() => setActive("dashboard")}><HardDrive /> Dashboard</button>
-        <button className={active === "protect" ? "nav active" : "nav"} onClick={() => setActive("protect")}><ShieldCheck /> Protect data</button>
-        <button className={active === "recovery" ? "nav active" : "nav"} onClick={() => setActive("recovery")}><LifeBuoy /> Recovery</button>
-        <button className={active === "schedule" ? "nav active" : "nav"} onClick={() => setActive("schedule")}><CalendarClock /> Schedule</button>
-        <button className={active === "alerts" ? "nav active" : "nav"} onClick={() => setActive("alerts")}><AlertTriangle /> Alerts</button>
-        <button className={active === "settings" ? "nav active" : "nav"} onClick={() => setActive("settings")}><Bell /> Notifications</button>
-        {authStatus.authEnabled && (
-          <button className={active === "profile" ? "nav active" : "nav"} onClick={() => setActive("profile")}><User /> Profile</button>
-        )}
+        {NAV_ITEMS.filter((item) => !item.authOnly || authStatus.authEnabled).map((item) => (
+          <button
+            key={item.page}
+            type="button"
+            className={active === item.page ? "nav active" : "nav"}
+            onClick={() => goToPage(item.page)}
+          >
+            {item.icon} {item.label}
+          </button>
+        ))}
       </aside>
 
       <main>
         <header className="topbar">
-          <div>
-            <BrandWordmark />
-            <p className="topbar-tagline">{brand.tagline}</p>
-            <p className="topbar-sub">Green means BackupProof saved your data and proved it can be restored.</p>
+          <div className="topbar-leading">
+            <button
+              type="button"
+              className="mobile-nav-toggle"
+              aria-label={navOpen ? "Close menu" : "Open menu"}
+              aria-expanded={navOpen}
+              onClick={() => setNavOpen((open) => !open)}
+            >
+              <Menu />
+            </button>
+            <div className="topbar-copy">
+              <h1 className="topbar-title">{PAGE_META[active].title}</h1>
+              <p className="topbar-sub">{PAGE_META[active].subtitle}</p>
+            </div>
           </div>
-          <div className="topbar-status">
-            <EnvironmentPills state={state} />
-            {currentUser && (
-              <button
-                type="button"
-                className="pill ok profile-pill"
-                title={`Signed in as ${currentUser.username}`}
-                onClick={() => authStatus.authEnabled && setActive("profile")}
-              >
-                {currentUser.username} · {roleLabel(currentUser.role)}
-              </button>
-            )}
-            {authStatus.authEnabled && (
-              <button type="button" className="ghost-button topbar-logout" onClick={() => void logout()}>Sign out</button>
-            )}
-            <span className={state.alerts.some((alert) => !alert.acknowledgedAt) ? "pill bad" : "pill ok"}>
-              {state.alerts.filter((alert) => !alert.acknowledgedAt).length} alerts
-            </span>
+          <div className="topbar-trailing">
+            <TopbarToolbar
+              state={state}
+              currentUser={currentUser}
+              authEnabled={authStatus.authEnabled}
+              onAlerts={() => goToPage("alerts")}
+              onProfile={() => goToPage("profile")}
+              onLogout={() => void logout()}
+            />
           </div>
         </header>
+        <div className="page-body">
         {!writeAccess && (
           <div className="banner info">Signed in as a read-only user. Backup and settings changes are disabled.</div>
         )}
@@ -454,28 +546,76 @@ function App() {
             onDismiss={dismissFirstRun}
           />
         )}
+        </div>
+        {jobToast && (
+          <div className="toast-host" aria-live="polite">
+            <FlashBanner message={jobToast} onDismiss={clearJobToast} variant="danger" />
+          </div>
+        )}
       </main>
     </div>
   );
 }
 
-function EnvironmentPills({ state }: { state: DashboardState }) {
-  const items = [
-    ["Storage ready", state.environment.dataDirWritable],
-    ["Built-in backups", true],
-    ["Restic add-on", state.environment.resticAvailable ?? false],
-    ["Kopia add-on", state.environment.kopiaAvailable ?? false]
-  ] as const;
+function TopbarToolbar({
+  state,
+  currentUser,
+  authEnabled,
+  onAlerts,
+  onProfile,
+  onLogout
+}: {
+  state: DashboardState;
+  currentUser: AuthUser | null;
+  authEnabled: boolean;
+  onAlerts: () => void;
+  onProfile: () => void;
+  onLogout: () => void;
+}) {
+  const alertCount = state.alerts.filter((alert) => !alert.acknowledgedAt).length;
+  const hasAlerts = alertCount > 0;
+  const storageOk = state.environment.dataDirWritable;
+  const optionalEngines = [
+    state.environment.resticAvailable ? `Restic ${state.environment.resticVersion ?? ""}`.trim() : null,
+    state.environment.kopiaAvailable ? `Kopia ${state.environment.kopiaVersion ?? ""}`.trim() : null
+  ].filter(Boolean).join(" · ");
+
   return (
-    <div className="pills">
-      {items.map(([label, ok]) => (
-        <span className={ok ? "pill ok" : "pill bad"} key={label} title={
-          label === "Restic add-on" ? state.environment.resticVersion : label === "Kopia add-on" ? state.environment.kopiaVersion : undefined
-        }>
-          {ok ? <CheckCircle2 /> : <XCircle />}
-          {label}
-        </span>
-      ))}
+    <div className="topbar-toolbar">
+      <span
+        className={`topbar-segment system-status ${storageOk ? "ok" : "bad"}`}
+        title={storageOk ? (optionalEngines ? `Optional engines: ${optionalEngines}` : "Built-in backup engine is ready") : "Backup storage is not writable"}
+      >
+        {storageOk ? <CheckCircle2 /> : <XCircle />}
+        <span className="topbar-segment-text">{storageOk ? "System ready" : "Storage issue"}</span>
+      </span>
+      <button
+        type="button"
+        className={`topbar-segment alert-segment${hasAlerts ? " has-alerts" : ""}`}
+        onClick={onAlerts}
+      >
+        {hasAlerts ? <AlertTriangle /> : <Bell />}
+        <span className="topbar-segment-text">{alertCount} alert{alertCount === 1 ? "" : "s"}</span>
+      </button>
+      {currentUser && authEnabled && (
+        <>
+          <button
+            type="button"
+            className="topbar-segment account-segment"
+            title={`Signed in as ${currentUser.username}`}
+            onClick={onProfile}
+          >
+            <span className="account-avatar" aria-hidden="true">{currentUser.username.slice(0, 1).toUpperCase()}</span>
+            <span className="account-meta">
+              <strong>{currentUser.username}</strong>
+              <small>{roleLabel(currentUser.role)}</small>
+            </span>
+          </button>
+          <button type="button" className="topbar-segment signout-segment" onClick={onLogout}>
+            Sign out
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -531,7 +671,7 @@ function Dashboard({
     <section className="dashboard-layout">
       <div className="apps">
         <RecoveryCoachPanel coach={buildRecoveryCoach(state, summaries, { reportDownloaded: Boolean(window.localStorage.getItem(REPORT_KEY)) })} goTo={goTo} />
-        <ReadinessOverview counts={counts} summaries={orderedSummaries} refresh={refresh} writeAccess={writeAccess} />
+        <BackupHealthPanel counts={counts} summaries={orderedSummaries} refresh={refresh} writeAccess={writeAccess} />
         {!hasProtectedData && <div className="demo-strip">
           <div>
             <strong>Try a safe demo</strong>
@@ -557,7 +697,6 @@ function Dashboard({
             ))}
           </div>
         )}
-        {hasProtectedData && <RecoveryAnalyticsPanel />}
       </div>
       <JobLog jobs={jobs} refresh={refresh} />
     </section>
@@ -627,14 +766,33 @@ function CircleIcon() {
   return <span className="circle-icon" aria-hidden="true" />;
 }
 
-function RecoveryAnalyticsPanel() {
+function BackupHealthPanel({
+  counts,
+  summaries,
+  refresh,
+  writeAccess
+}: {
+  counts: ReturnType<typeof readinessCounts>;
+  summaries: AppSummary[];
+  refresh: () => Promise<void>;
+  writeAccess: boolean;
+}) {
   const [period, setPeriod] = useState<30 | 90>(30);
   const [analytics, setAnalytics] = useState<RecoveryAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [message, setMessage] = useFlashMessage();
+  const next = summaries.find((summary) => readinessAdvice(summary).state !== "proven");
+  const advice = next ? readinessAdvice(next) : undefined;
+  const [running, setRunning] = useState(false);
+  const hasProtectedData = counts.total > 0;
 
   useEffect(() => {
+    if (!hasProtectedData) {
+      setAnalytics(null);
+      setLoading(false);
+      return;
+    }
     let active = true;
     setLoading(true);
     void api.getRecoveryAnalytics(period).then((data) => {
@@ -646,7 +804,18 @@ function RecoveryAnalyticsPanel() {
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [period]);
+  }, [period, hasProtectedData]);
+
+  async function runNext() {
+    if (!next || !advice?.action) return;
+    setRunning(true);
+    try {
+      await api.post(`/api/apps/${next.app.id}/jobs/${advice.action}`);
+      await refresh();
+    } finally {
+      setRunning(false);
+    }
+  }
 
   async function downloadReport() {
     setMessage("");
@@ -665,87 +834,114 @@ function RecoveryAnalyticsPanel() {
       ? "Today"
       : `${analytics.summary.averageDaysSinceProof}d ago`;
 
+  const headline = !hasProtectedData
+    ? "Protect your first backup"
+    : loading && !analytics
+      ? "Checking your backups..."
+      : analytics
+        ? recoveryHealthHeadline(analytics)
+        : counts.attention === 0
+          ? "Everything looks good"
+          : `${counts.attention} item${counts.attention === 1 ? "" : "s"} need${counts.attention === 1 ? "s" : ""} attention`;
+
+  const summary = !hasProtectedData
+    ? "Pick files or apps you care about and save the first backup."
+    : analytics
+      ? recoveryHealthSummary(analytics)
+      : counts.attention === 0
+        ? "BackupProof has tested your backups and they can be restored."
+        : "Fix the item below first — BackupProof will tell you exactly what to do.";
+
   return (
-    <section className="analytics-panel analytics-compact">
-      <div className="analytics-summary">
+    <section className="readiness-overview backup-health-panel">
+      <div className="readiness-heading">
         <div>
           <span className="eyebrow"><TrendingUp /> Backup health</span>
-          <h2>{loading && !analytics ? "Checking your backups..." : analytics ? recoveryHealthHeadline(analytics) : "Backup health"}</h2>
-          {analytics && <p className="muted">{recoveryHealthSummary(analytics)}</p>}
+          <h2>{headline}</h2>
+          <p>{summary}</p>
         </div>
-        {analytics && (
-          <div className="analytics-summary-stats">
-            <div className="stat-good">
-              <strong>{analytics.summary.provenItems}/{analytics.summary.protectedItems}</strong>
-              <span>Ready to restore</span>
-            </div>
-            <div>
-              <strong>{lastCheckLabel}</strong>
-              <span>Since last test</span>
-            </div>
+        {next && advice && (
+          <div className={`next-action ${advice.state}`}>
+            <span>Do this next</span>
+            <strong>{next.app.name}</strong>
+            <p>{advice.message}</p>
+            {advice.action && (
+              <button onClick={runNext} disabled={running || !writeAccess}>
+                {advice.action === "backup" ? <Play /> : <RotateCcw />}
+                {running ? "Starting..." : advice.actionLabel}
+              </button>
+            )}
           </div>
         )}
       </div>
-      <FlashBanner message={message} onDismiss={() => setMessage("")} />
-      {analytics && (
-        <div className="analytics-expand-row">
-          <button type="button" className="ghost-button analytics-toggle" onClick={() => setExpanded((open) => !open)}>
-            {expanded ? <><ChevronUp size={16} /> Hide history</> : <><ChevronDown size={16} /> View backup history</>}
-          </button>
-          {expanded && (
-            <button type="button" className="ghost-button" onClick={() => void downloadReport()}><Download /> Download report</button>
+      {hasProtectedData && (
+        <div className="readiness-stats readiness-stats-compact">
+          <div className="stat-good"><strong>{counts.proven}</strong><span>Ready to restore</span></div>
+          {counts.attention > 0 && <div className="stat-warning"><strong>{counts.attention}</strong><span>Need attention</span></div>}
+          <div><strong>{counts.total}</strong><span>Protected</span></div>
+          {analytics && (
+            <div><strong>{lastCheckLabel}</strong><span>Since last test</span></div>
           )}
         </div>
       )}
-      {expanded && analytics && (
-        <div className="analytics-details">
-          <div className="analytics-actions inline">
-            <div className="filter-tabs" aria-label="History period">
-              <button type="button" className={period === 30 ? "active" : ""} onClick={() => setPeriod(30)}>Last 30 days</button>
-              <button type="button" className={period === 90 ? "active" : ""} onClick={() => setPeriod(90)}>Last 90 days</button>
-            </div>
+      <FlashBanner message={message} onDismiss={() => setMessage("")} />
+      {hasProtectedData && analytics && (
+        <>
+          <div className="analytics-expand-row">
+            <button type="button" className="ghost-button analytics-toggle" onClick={() => setExpanded((open) => !open)}>
+              {expanded ? <><ChevronUp size={16} /> Hide history</> : <><ChevronDown size={16} /> Show history</>}
+            </button>
+            {expanded && (
+              <button type="button" className="ghost-button" onClick={() => void downloadReport()}><Download /> Download report</button>
+            )}
           </div>
-          <p className="muted analytics-details-lead">For people who want the full picture — restore tests and practice recoveries over time.</p>
-          <div className="analytics-trend-wrap">
-            <div className="analytics-trend" aria-label="Restore test results by day">
-              {analytics.trend.map((point) => (
-                <div className="analytics-bar-wrap" key={point.date} title={`${point.date}: ${point.hasData ? `${point.averageScore}% passed` : "No tests"}`}>
-                  <div
-                    className={`analytics-bar ${point.hasData ? "has-data" : ""}`}
-                    style={{ height: point.hasData ? `${Math.max(8, (point.averageScore / trendMax) * 100)}%` : "6px" }}
-                  />
-                  <span className="analytics-bar-label">{point.date.slice(5)}</span>
+          {expanded && (
+            <div className="analytics-details">
+              <div className="analytics-actions inline">
+                <div className="filter-tabs" aria-label="History period">
+                  <button type="button" className={period === 30 ? "active" : ""} onClick={() => setPeriod(30)}>Last 30 days</button>
+                  <button type="button" className={period === 90 ? "active" : ""} onClick={() => setPeriod(90)}>Last 90 days</button>
                 </div>
-              ))}
-            </div>
-          </div>
-          <div className="analytics-grid">
-            <div className="analytics-list">
-              <h3>Your protected items</h3>
-              {analytics.apps.length === 0 ? (
-                <p className="muted">Nothing protected yet.</p>
-              ) : analytics.apps.map((app) => (
-                <div className="analytics-row" key={app.appId}>
-                  <strong>{app.appName}</strong>
-                  <span>{app.restorable ? "Ready to restore" : "Needs a restore test"}</span>
-                  <span>Last test {formatDaysSince(app.lastProofAt)}</span>
+              </div>
+              <p className="muted analytics-details-lead">Restore tests over time and a log of recent saves.</p>
+              <div className="analytics-trend-wrap">
+                <div className="analytics-trend" aria-label="Restore test results by day">
+                  {analytics.trend.map((point) => (
+                    <div className="analytics-bar-wrap" key={point.date} title={`${point.date}: ${point.hasData ? `${point.averageScore}% passed` : "No tests"}`}>
+                      <div
+                        className={`analytics-bar ${point.hasData ? "has-data" : ""}`}
+                        style={{ height: point.hasData ? `${Math.max(8, (point.averageScore / trendMax) * 100)}%` : "6px" }}
+                      />
+                      <span className="analytics-bar-label">{point.date.slice(5)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="analytics-list">
-              <h3>Practice recoveries</h3>
-              {analytics.drills.length === 0 ? (
-                <p className="muted">No practice recoveries in this period. Try one from the Recovery page.</p>
-              ) : analytics.drills.slice(0, 6).map((drill) => (
-                <div className="analytics-row" key={`${drill.appId}-${drill.id}`}>
-                  <strong>{drill.appName}</strong>
-                  <span>{time(drill.restoredAt)}</span>
-                  <span>{drill.proofStatus === "passed" ? "Passed" : "Needs review"}</span>
+              </div>
+              <div className="analytics-list history-items-list">
+                <h3>Your protected items</h3>
+                {summaries.map((summary) => (
+                  <div className="analytics-row" key={summary.app.id}>
+                    <strong>{summary.app.name}</strong>
+                    <span>{summary.snapshotCount} save{summary.snapshotCount === 1 ? "" : "s"} · last {time(summary.latestBackup?.finishedAt)}</span>
+                    <span>{summary.restorable ? "Ready to restore" : "Needs a restore test"} · tested {formatDaysSince(summary.restoreProof?.testedAt)}</span>
+                  </div>
+                ))}
+              </div>
+              {analytics.drills.length > 0 && (
+                <div className="analytics-list history-drills-list">
+                  <h3>Practice recoveries</h3>
+                  {analytics.drills.slice(0, 6).map((drill) => (
+                    <div className="analytics-row" key={`${drill.appId}-${drill.id}`}>
+                      <strong>{drill.appName}</strong>
+                      <span>{time(drill.restoredAt)}</span>
+                      <span>{drill.proofStatus === "passed" ? "Passed" : "Needs review"}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-        </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -786,86 +982,35 @@ function FirstRunWizard({
         </div>
         <ol className="first-run-steps">
           <li>
-            <ShieldCheck />
-            <div>
+            <span className="first-run-step-icon" aria-hidden="true"><ShieldCheck /></span>
+            <div className="first-run-step-body">
+              <span className="first-run-step-num">Step 1</span>
               <strong>Protect something important</strong>
               <p>Choose photos, documents, app data, or a website folder.</p>
-              <button type="button" className="primary" onClick={onProtect}>Start protect wizard</button>
+              <button type="button" className="first-run-btn primary" onClick={onProtect}>Start protect wizard</button>
             </div>
           </li>
           <li>
-            <Play />
-            <div>
+            <span className="first-run-step-icon" aria-hidden="true"><Play /></span>
+            <div className="first-run-step-body">
+              <span className="first-run-step-num">Step 2</span>
               <strong>Save and check the first backup</strong>
               <p>Try the safe demo if you want to watch the full flow first.</p>
-              <button type="button" onClick={() => void runDemo()} disabled={demoRunning}>{demoRunning ? "Starting demo..." : "Run safe demo"}</button>
+              <button type="button" className="first-run-btn secondary" onClick={() => void runDemo()} disabled={demoRunning}>{demoRunning ? "Starting demo..." : "Run safe demo"}</button>
             </div>
           </li>
           <li>
-            <Bell />
-            <div>
+            <span className="first-run-step-icon" aria-hidden="true"><Bell /></span>
+            <div className="first-run-step-body">
+              <span className="first-run-step-num">Step 3</span>
               <strong>Turn on alerts</strong>
               <p>Get a plain-language email when a backup or recovery check needs attention.</p>
-              <button type="button" onClick={onAlerts}>Set up alerts</button>
+              <button type="button" className="first-run-btn secondary" onClick={onAlerts}>Set up alerts</button>
             </div>
           </li>
         </ol>
       </div>
     </div>
-  );
-}
-
-function ReadinessOverview({
-  counts,
-  summaries,
-  refresh,
-  writeAccess
-}: {
-  counts: ReturnType<typeof readinessCounts>;
-  summaries: AppSummary[];
-  refresh: () => Promise<void>;
-  writeAccess: boolean;
-}) {
-  const next = summaries.find((summary) => readinessAdvice(summary).state !== "proven");
-  const advice = next ? readinessAdvice(next) : undefined;
-  const [running, setRunning] = useState(false);
-
-  async function runNext() {
-    if (!next || !advice?.action) return;
-    setRunning(true);
-    try {
-      await api.post(`/api/apps/${next.app.id}/jobs/${advice.action}`);
-      await refresh();
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  return (
-    <section className="readiness-overview">
-      <div className="readiness-heading">
-        <div>
-          <span className="eyebrow"><Activity /> At a glance</span>
-          <h2>{counts.total === 0 ? "Protect your first backup" : counts.attention === 0 ? "Everything looks good" : `${counts.attention} item${counts.attention === 1 ? "" : "s"} need${counts.attention === 1 ? "s" : ""} attention`}</h2>
-          <p>{counts.total === 0 ? "Pick files or apps you care about and save the first backup." : counts.attention === 0 ? "BackupProof has tested your backups and they can be restored." : "Fix the item below first — BackupProof will tell you exactly what to do."}</p>
-        </div>
-        {next && advice && (
-          <div className={`next-action ${advice.state}`}>
-            <span>Do this next</span>
-            <strong>{next.app.name}</strong>
-            <p>{advice.message}</p>
-            {advice.action && <button onClick={runNext} disabled={running || !writeAccess}>{advice.action === "backup" ? <Play /> : <RotateCcw />}{running ? "Starting..." : advice.actionLabel}</button>}
-          </div>
-        )}
-      </div>
-      {counts.total > 0 && (
-        <div className="readiness-stats readiness-stats-compact">
-          <div className="stat-good"><strong>{counts.proven}</strong><span>Ready to restore</span></div>
-          {counts.attention > 0 && <div className="stat-warning"><strong>{counts.attention}</strong><span>Need attention</span></div>}
-          <div><strong>{counts.total}</strong><span>Protected</span></div>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -962,7 +1107,9 @@ function AppCard({ summary, refresh, onAddSecondCopy, writeAccess }: { summary: 
       </p>
       <details className="advanced-details">
         <summary>Technical details</summary>
-      <SnapshotTrend history={summary.snapshotHistory} />
+      {summary.snapshotCount > 0 && (
+        <div className="snapshot-line">{summary.snapshotCount} backup point{summary.snapshotCount === 1 ? "" : "s"} saved</div>
+      )}
       <div className="snapshot-line">Latest backup point: {summary.latestSnapshot?.id ?? "None yet"}</div>
       <div className="snapshot-line">Backup storage: {summary.repository?.name ?? "Not configured"} · {summary.repository?.type}{summary.repository?.objectLock ? " · Immutable" : ""}</div>
       {(summary.app.secondaryRepositoryIds ?? []).length > 0 && (
@@ -972,7 +1119,6 @@ function AppCard({ summary, refresh, onAddSecondCopy, writeAccess }: { summary: 
         {summary.app.healthChecks.length === 0 ? <span>No recovery checks configured</span> : summary.app.healthChecks.map((check) => <span key={check.id}>{check.type}: {check.target}</span>)}
       </div>
       </details>
-      {summary.alerts.length > 0 && <div className="inline-alert">{summary.alerts[0].title}</div>}
       <div className="actions simplified-actions">
         <button
           className="primary-card-action"
@@ -1005,25 +1151,6 @@ function AppCard({ summary, refresh, onAddSecondCopy, writeAccess }: { summary: 
       </details>
       <FlashBanner message={message} onDismiss={() => setMessage("")} />
     </article>
-  );
-}
-
-function SnapshotTrend({ history }: { history: AppSummary["snapshotHistory"] }) {
-  if (history.length === 0) return null;
-  const max = Math.max(...history.map((snapshot) => snapshot.sizeBytes), 1);
-  return (
-    <div className="snapshot-trend" title="Stored bytes added by recent snapshots">
-      <div className="trend-label"><span>Backup history</span><strong>{history.length} recent</strong></div>
-      <div className="trend-bars">
-        {history.map((snapshot) => (
-          <span
-            key={snapshot.id}
-            style={{ height: `${Math.max(8, (snapshot.sizeBytes / max) * 100)}%` }}
-            title={`${time(snapshot.createdAt)} · ${bytes(snapshot.sizeBytes)}`}
-          />
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1587,12 +1714,7 @@ function ProtectData({ state, refresh, writeAccess }: { state: DashboardState; r
 
   return (
     <section className={`wizard-flow ${pathMode === "scan" && step === 0 ? "wide" : ""}`}>
-      <div className="wizard-intro">
-        <h2>Protect data</h2>
-        <p>Choose the data that matters, where backup copies should live, and how BackupProof will check that recovery works.</p>
-      </div>
-
-      <div className="wizard-steps">
+      <div className="wizard-steps" aria-label="Setup progress">
         {PROTECT_STEPS.map((label, index) => (
           <div className={`wizard-step ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} key={label}>
             <span className="wizard-step-num">{index < step ? "✓" : index + 1}</span>
@@ -2328,7 +2450,6 @@ function Recovery({
 
   return (
     <section className="recovery">
-      <h2><LifeBuoy /> Get Your Data Back</h2>
       <RecoveryCoachPanel coach={buildRecoveryCoach(state, summaries)} goTo={goTo} compact />
       <div className="recovery-steps">
         <div><strong>1</strong><span>Choose what you want to recover.</span></div>
@@ -2707,8 +2828,12 @@ function Alerts({ state, summaries, refresh, writeAccess }: { state: DashboardSt
 
   return (
     <section className="alerts-layout">
-      <div className="section-title">
-        <h2>Alert Center</h2>
+      <div className="section-title alerts-toolbar">
+        <p className="page-lead compact">
+          {activeAlerts.length === 0
+            ? "Nothing needs your attention right now."
+            : `${activeAlerts.length} active alert${activeAlerts.length === 1 ? "" : "s"} need review.`}
+        </p>
         <button className="primary" disabled={activeAlerts.length === 0} onClick={acknowledgeAll}><CheckCircle2 /> Acknowledge all</button>
       </div>
       <div className="alert-list">

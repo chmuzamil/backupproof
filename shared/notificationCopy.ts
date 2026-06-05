@@ -36,9 +36,19 @@ export function friendlyAlertTitle(title: string) {
     "Repository missing": "Backup storage is missing",
     "Repository unreachable": "Backup storage could not be reached",
     "Secondary backup failed": "Second copy backup failed",
+    "backup failed": "Backup failed",
+    "check failed": "Storage check failed",
+    "prune failed": "Cleanup failed",
+    "restore-test failed": "Recovery check failed",
+    "manual-restore failed": "File recovery failed",
+    "dr-run failed": "Recovery practice failed",
     "BackupProof test alert": "BackupProof test alert"
   };
   return map[title] ?? title;
+}
+
+export function friendlyJobAlertTitle(jobType: string) {
+  return friendlyAlertTitle(`${jobType} failed`);
 }
 
 export function friendlyAlertMessage(message: string) {

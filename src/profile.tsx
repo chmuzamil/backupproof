@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Lock, Trash2, User, UserPlus, Users, XCircle } from "lucide-react";
+import { Lock, Trash2, UserPlus, Users, XCircle } from "lucide-react";
 import { MIN_PASSWORD_LENGTH } from "../shared/schemas";
 import type { AuthUser, UserRole, UserSummary } from "../shared/types";
 import { authFetch, isAdmin, roleDescription, roleLabel } from "./auth";
@@ -7,12 +7,23 @@ import { authFetch, isAdmin, roleDescription, roleLabel } from "./auth";
 function ProfileBanner({
   message,
   onDismiss,
-  variant = "info"
+  variant = "info",
+  autoDismissMs = 4500
 }: {
   message: string;
   onDismiss: () => void;
   variant?: "info" | "danger";
+  autoDismissMs?: number;
 }) {
+  const onDismissRef = React.useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+
+  React.useEffect(() => {
+    if (!message || autoDismissMs <= 0) return;
+    const timer = window.setTimeout(() => onDismissRef.current(), autoDismissMs);
+    return () => window.clearTimeout(timer);
+  }, [message, autoDismissMs]);
+
   if (!message) return null;
   return (
     <div className={`banner flash ${variant}`} role="status">
@@ -188,17 +199,6 @@ export function Profile({
 
   return (
     <section className="profile-layout">
-      <header className="profile-header">
-        <div>
-          <h1><User /> Profile</h1>
-          <p className="muted">Manage your sign-in password and dashboard users.</p>
-        </div>
-        <div className="profile-identity">
-          <strong>{currentUser.username}</strong>
-          <span className="pill ok">{roleLabel(currentUser.role)}</span>
-        </div>
-      </header>
-
       <form
         className="wizard compact profile-card"
         noValidate
