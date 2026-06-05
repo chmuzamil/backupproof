@@ -1,10 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { v4 as uuid } from "uuid";
 import { config } from "./config";
 import { hashPassword } from "./auth";
 import { decryptSecret, encryptSecret } from "./crypto";
-import type { Alert, App, AuditEntry, DashboardState, FleetAgent, Job, NotificationTarget, Policy, Repository, RestoreDestinationTemplate, RestoreProof, User } from "../shared/types";
+import type { Alert, App, AuditEntry, DashboardState, FleetAgent, Job, NotificationTarget, Policy, Repository, RestoreDestinationTemplate, RestoreProof, User, UserRole } from "../shared/types";
 
 interface PersistedState extends Omit<DashboardState, "environment"> {
   secrets: Record<string, string>;
@@ -203,6 +204,9 @@ export class Store {
   }
 
   async addUser(input: Omit<User, "id" | "createdAt" | "passwordHash"> & { password: string }) {
+    if (this.findUserByUsername(input.username.trim())) {
+      throw new Error("That username is already taken.");
+    }
     const item: User = {
       id: uuid(),
       username: input.username,
@@ -217,6 +221,58 @@ export class Store {
 
   findUserByUsername(username: string) {
     return this.state.users.find((u) => u.username === username);
+  }
+
+  async updateUserCredentials(userId: string, username: string, password: string) {
+    const user = this.state.users.find((item) => item.id === userId);
+    if (!user) throw new Error("User not found");
+    user.username = username.trim();
+    user.passwordHash = hashPassword(password);
+    await this.save();
+    return user;
+  }
+
+  async updateUserPassword(userId: string, password: string) {
+    const user = this.state.users.find((item) => item.id === userId);
+    if (!user) throw new Error("User not found");
+    user.passwordHash = hashPassword(password);
+    await this.save();
+    return user;
+  }
+
+  async updateUserRole(userId: string, role: User["role"]) {
+    const user = this.state.users.find((item) => item.id === userId);
+    if (!user) throw new Error("User not found");
+    user.role = role;
+    await this.save();
+    return user;
+  }
+
+  async deleteUser(userId: string) {
+    const user = this.state.users.find((item) => item.id === userId);
+    if (!user) throw new Error("User not found");
+    this.state.users = this.state.users.filter((item) => item.id !== userId);
+    await this.save();
+    return user;
+  }
+
+  adminCount() {
+    return this.state.users.filter((user) => user.role === "admin").length;
+  }
+
+  async findOrCreateOidcUser(username: string, role: UserRole = "operator") {
+    const existing = this.findUserByUsername(username);
+    if (existing) return existing;
+    const item: User = {
+      id: uuid(),
+      username,
+      passwordHash: hashPassword(crypto.randomBytes(24).toString("hex")),
+      role,
+      createdAt: now()
+    };
+    this.state.users.push(item);
+    await this.save();
+    return item;
   }
 
   async addAuditEntry(entry: AuditEntry) {

@@ -9,6 +9,8 @@ import {
   CalendarClock,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Cloud,
   Database,
   Download,
@@ -18,6 +20,7 @@ import {
   GitCompare,
   HardDrive,
   LifeBuoy,
+  LogIn,
   Play,
   Scissors,
   RotateCcw,
@@ -28,11 +31,12 @@ import {
   Trash2,
   TrendingUp,
   Upload,
+  User,
   XCircle
 } from "lucide-react";
-import type { Alert, AppSummary, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
+import type { Alert, AppSummary, AuthStatus, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
 import { brand } from "../shared/brand";
-import { formatDaysSince, type RecoveryAnalytics } from "../shared/recoveryAnalytics";
+import { formatDaysSince, recoveryHealthHeadline, recoveryHealthSummary, type RecoveryAnalytics } from "../shared/recoveryAnalytics";
 import { readinessAdvice, readinessCounts, type ReadinessState } from "../shared/readiness";
 import { buildRecoveryCoach, type CoachRoute, type CoachTask, type RecoveryCoach } from "../shared/recoveryCoach";
 import {
@@ -42,65 +46,74 @@ import {
   createStorageFormState,
   type StorageFormState
 } from "./storageSetup";
+import {
+  LoginScreen,
+  authFetch,
+  canWrite,
+  clearAuthToken,
+  fetchAuthStatus,
+  getAuthToken,
+  roleLabel,
+  setAuthToken
+} from "./auth";
+import { Profile } from "./profile";
 import "./styles.css";
 
 const api = {
   async getState(): Promise<DashboardState> {
-    return fetch("/api/state").then((res) => res.json());
+    return authFetch("/api/state").then((res) => res.json());
   },
   async getSummaries(): Promise<AppSummary[]> {
-    return fetch("/api/summaries").then((res) => res.json());
+    return authFetch("/api/summaries").then((res) => res.json());
   },
   async getRecoveryAnalytics(period: 30 | 90 = 30): Promise<RecoveryAnalytics> {
-    return fetch(`/api/analytics/recovery?period=${period}`).then((res) => res.json());
+    return authFetch(`/api/analytics/recovery?period=${period}`).then((res) => res.json());
   },
   async getSnapshots(appId: string): Promise<SnapshotSummary[]> {
-    return fetch(`/api/apps/${appId}/snapshots`).then((res) => res.json());
+    return authFetch(`/api/apps/${appId}/snapshots`).then((res) => res.json());
   },
   async getProofHistory(appId: string): Promise<RestoreProof[]> {
-    return fetch(`/api/apps/${appId}/proof-history`).then((res) => res.json());
+    return authFetch(`/api/apps/${appId}/proof-history`).then((res) => res.json());
   },
   async getSnapshotContents(appId: string, snapshotId: string): Promise<SnapshotContents> {
-    return fetch(`/api/apps/${appId}/snapshots/${snapshotId}/contents`).then((res) => res.json());
+    return authFetch(`/api/apps/${appId}/snapshots/${snapshotId}/contents`).then((res) => res.json());
   },
   async compareSnapshot(appId: string, snapshotId: string): Promise<SnapshotComparison> {
-    return fetch(`/api/apps/${appId}/snapshots/${snapshotId}/compare`).then((res) => res.json());
+    return authFetch(`/api/apps/${appId}/snapshots/${snapshotId}/compare`).then((res) => res.json());
   },
   async getDrReports(appId: string): Promise<DrReportSummary[]> {
-    return fetch(`/api/apps/${appId}/dr-reports`).then((res) => res.json());
+    return authFetch(`/api/apps/${appId}/dr-reports`).then((res) => res.json());
   },
   async getDiscovery(): Promise<DiscoveryResult> {
-    return fetch("/api/discovery").then((res) => res.json());
+    return authFetch("/api/discovery").then((res) => res.json());
   },
   async browseFiles(path?: string): Promise<FileBrowserResult> {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
-    return fetch(`/api/filesystem/browse${query}`).then((res) => res.json());
+    return authFetch(`/api/filesystem/browse${query}`).then((res) => res.json());
   },
   async post(path: string, body?: unknown) {
-    const res = await fetch(path, {
+    const res = await authFetch(path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     });
     if (!res.ok) throw new Error((await res.json()).error ?? "Request failed");
     return res.json();
   },
   async put(path: string, body: unknown) {
-    const res = await fetch(path, {
+    const res = await authFetch(path, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
       body: JSON.stringify(body)
     });
     if (!res.ok) throw new Error((await res.json()).error ?? "Request failed");
     return res.json();
   },
   async delete(path: string) {
-    const res = await fetch(path, { method: "DELETE" });
+    const res = await authFetch(path, { method: "DELETE" });
     if (!res.ok) throw new Error((await res.json()).error ?? "Request failed");
     return res.json();
   },
   async download(path: string) {
-    const res = await fetch(path);
+    const res = await authFetch(path);
     if (!res.ok) throw new Error((await res.json()).error ?? "Download failed");
     const blob = await res.blob();
     const disposition = res.headers.get("content-disposition") ?? "";
@@ -116,23 +129,14 @@ const api = {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   async importPortable(file: File, targetDir?: string) {
-    const res = await fetch("/api/portable/import", {
-      method: "POST",
-      headers: {
-        "content-type": "application/gzip",
-        ...(targetDir ? { "x-restore-target": targetDir } : {})
-      },
-      body: file
-    });
+    const headers: Record<string, string> = { "content-type": "application/gzip" };
+    if (targetDir) headers["x-restore-target"] = targetDir;
+    const res = await authFetch("/api/portable/import", { method: "POST", headers, body: file });
     if (!res.ok) throw new Error((await res.json()).error ?? "Portable backup import failed");
     return res.json();
   },
   async downloadPost(path: string, body: unknown, fallbackName: string) {
-    const res = await fetch(path, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body)
-    });
+    const res = await authFetch(path, { method: "POST", body: JSON.stringify(body) });
     if (!res.ok) throw new Error((await res.json()).error ?? "Download failed");
     const blob = await res.blob();
     const disposition = res.headers.get("content-disposition") ?? "";
@@ -147,7 +151,7 @@ const api = {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   async importRecoveryKit(file: File, passphrase: string) {
-    const res = await fetch("/api/recovery-kit/import", {
+    const res = await authFetch("/api/recovery-kit/import", {
       method: "POST",
       headers: { "content-type": "application/octet-stream", "x-recovery-passphrase": passphrase },
       body: file
@@ -227,17 +231,50 @@ function SidebarBrand() {
 }
 
 const FIRST_RUN_KEY = "backupproof.firstRunDismissed";
+const REPORT_KEY = "backupproof.reportDownloaded";
 
 function App() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [state, setState] = useState<DashboardState | null>(null);
   const [summaries, setSummaries] = useState<AppSummary[]>([]);
-  const [active, setActive] = useState<"dashboard" | "protect" | "recovery" | "schedule" | "alerts" | "settings">("dashboard");
+  const [active, setActive] = useState<"dashboard" | "protect" | "recovery" | "schedule" | "alerts" | "settings" | "profile">("dashboard");
   const [secondStorageAppId, setSecondStorageAppId] = useState<string | null>(null);
   const [focusAlertsSetup, setFocusAlertsSetup] = useState(false);
   const [showFirstRun, setShowFirstRun] = useState(false);
   const [error, setError] = useState<string>();
 
+  const currentUser = authStatus?.user ?? null;
+  const writeAccess = canWrite(currentUser?.role);
+
+  async function loadAuthStatus() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const oidcToken = params.get("auth");
+      if (oidcToken) {
+        setAuthToken(oidcToken);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      const status = await fetchAuthStatus();
+      setAuthStatus(status);
+      return status;
+    } catch {
+      setAuthStatus({
+        authEnabled: false,
+        oidcAvailable: false,
+        setupRequired: false,
+        user: null
+      });
+      return null;
+    }
+  }
+
   function handleCoachGoTo(route: CoachRoute, task?: CoachTask) {
+    if (task?.id === "recovery-report") {
+      void api.download("/api/analytics/recovery/report?period=30").then(() => {
+        window.localStorage.setItem(REPORT_KEY, "1");
+      });
+      return;
+    }
     if (task?.id === "offsite-copy") {
       setActive("dashboard");
       const candidate = state?.apps.find((app) => !(app.secondaryRepositoryIds?.length)) ?? state?.apps[0];
@@ -275,16 +312,44 @@ function App() {
       setSummaries(nextSummaries);
       setError(undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load dashboard");
+      const message = err instanceof Error ? err.message : "Could not load dashboard";
+      if (message.toLowerCase().includes("authentication")) {
+        clearAuthToken();
+        setAuthStatus(await fetchAuthStatus());
+      }
+      setError(message);
     }
   }
 
+  async function handleAuthenticated() {
+    const status = await loadAuthStatus();
+    if (status?.user) await refresh();
+  }
+
+  async function logout() {
+    try {
+      if (getAuthToken()) await api.post("/api/auth/logout");
+    } catch {
+      /* ignore logout errors */
+    }
+    clearAuthToken();
+    setState(null);
+    setSummaries([]);
+    setAuthStatus(await fetchAuthStatus());
+  }
+
   useEffect(() => {
+    void loadAuthStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus) return;
+    if (authStatus.authEnabled && !authStatus.user) return;
     void refresh();
     const events = new EventSource("/events");
     events.onmessage = () => void refresh();
     return () => events.close();
-  }, []);
+  }, [authStatus]);
 
   useEffect(() => {
     if (summaries.length === 0 && !window.localStorage.getItem(FIRST_RUN_KEY)) {
@@ -297,6 +362,19 @@ function App() {
   }, [active]);
 
   const latestJobs = useMemo(() => state?.jobs.slice(0, 8) ?? [], [state]);
+
+  if (!authStatus) {
+    return (
+      <div className="loading">
+        <img className="loading-logo" src="/logo-mark.svg" width={56} height={56} alt="" />
+        <span>{brand.loadingMessage}</span>
+      </div>
+    );
+  }
+
+  if (authStatus.authEnabled && !authStatus.user) {
+    return <LoginScreen authStatus={authStatus} onAuthenticated={handleAuthenticated} />;
+  }
 
   if (!state) {
     return (
@@ -317,6 +395,9 @@ function App() {
         <button className={active === "schedule" ? "nav active" : "nav"} onClick={() => setActive("schedule")}><CalendarClock /> Schedule</button>
         <button className={active === "alerts" ? "nav active" : "nav"} onClick={() => setActive("alerts")}><AlertTriangle /> Alerts</button>
         <button className={active === "settings" ? "nav active" : "nav"} onClick={() => setActive("settings")}><Bell /> Notifications</button>
+        {authStatus.authEnabled && (
+          <button className={active === "profile" ? "nav active" : "nav"} onClick={() => setActive("profile")}><User /> Profile</button>
+        )}
       </aside>
 
       <main>
@@ -324,25 +405,42 @@ function App() {
           <div>
             <BrandWordmark />
             <p className="topbar-tagline">{brand.tagline}</p>
-            <p className="topbar-sub">A green check means BackupProof restored your data and checked it.</p>
+            <p className="topbar-sub">Green means BackupProof saved your data and proved it can be restored.</p>
           </div>
           <div className="topbar-status">
             <EnvironmentPills state={state} />
+            {currentUser && (
+              <button
+                type="button"
+                className="pill ok profile-pill"
+                title={`Signed in as ${currentUser.username}`}
+                onClick={() => authStatus.authEnabled && setActive("profile")}
+              >
+                {currentUser.username} · {roleLabel(currentUser.role)}
+              </button>
+            )}
+            {authStatus.authEnabled && (
+              <button type="button" className="ghost-button topbar-logout" onClick={() => void logout()}>Sign out</button>
+            )}
             <span className={state.alerts.some((alert) => !alert.acknowledgedAt) ? "pill bad" : "pill ok"}>
               {state.alerts.filter((alert) => !alert.acknowledgedAt).length} alerts
             </span>
           </div>
         </header>
+        {!writeAccess && (
+          <div className="banner info">Signed in as a read-only user. Backup and settings changes are disabled.</div>
+        )}
         {error && <div className="banner danger">{error}</div>}
         {state.environment.errors.length > 0 && <div className="banner warning">{state.environment.errors.join(" ")}</div>}
         {state.environment.warnings.length > 0 && <div className="banner info">{state.environment.warnings.join(" ")}</div>}
 
-        {active === "dashboard" && <Dashboard state={state} summaries={summaries} jobs={latestJobs} refresh={refresh} goTo={handleCoachGoTo} onAddSecondCopy={setSecondStorageAppId} />}
-        {active === "protect" && <ProtectData state={state} refresh={refresh} />}
-        {active === "recovery" && <Recovery state={state} summaries={summaries} refresh={refresh} goTo={handleCoachGoTo} />}
-        {active === "schedule" && <Schedule state={state} summaries={summaries} refresh={refresh} />}
-        {active === "alerts" && <Alerts state={state} summaries={summaries} refresh={refresh} />}
-        {active === "settings" && <Notifications state={state} refresh={refresh} highlightSetup={focusAlertsSetup} />}
+        {active === "dashboard" && <Dashboard state={state} summaries={summaries} jobs={latestJobs} refresh={refresh} goTo={handleCoachGoTo} onAddSecondCopy={setSecondStorageAppId} writeAccess={writeAccess} />}
+        {active === "protect" && <ProtectData state={state} refresh={refresh} writeAccess={writeAccess} />}
+        {active === "recovery" && <Recovery state={state} summaries={summaries} refresh={refresh} goTo={handleCoachGoTo} writeAccess={writeAccess} />}
+        {active === "schedule" && <Schedule state={state} summaries={summaries} refresh={refresh} writeAccess={writeAccess} />}
+        {active === "alerts" && <Alerts state={state} summaries={summaries} refresh={refresh} writeAccess={writeAccess} />}
+        {active === "settings" && <Notifications state={state} refresh={refresh} highlightSetup={focusAlertsSetup} writeAccess={writeAccess} />}
+        {active === "profile" && <Profile authEnabled={authStatus.authEnabled} currentUser={currentUser} refresh={refresh} />}
         {secondStorageAppId && <SecondStorageModal state={state} appId={secondStorageAppId} onClose={() => setSecondStorageAppId(null)} refresh={refresh} />}
         {showFirstRun && summaries.length === 0 && (
           <FirstRunWizard
@@ -388,7 +486,8 @@ function Dashboard({
   jobs,
   refresh,
   goTo,
-  onAddSecondCopy
+  onAddSecondCopy,
+  writeAccess
 }: {
   state: DashboardState;
   summaries: AppSummary[];
@@ -396,6 +495,7 @@ function Dashboard({
   refresh: () => Promise<void>;
   goTo: (route: CoachRoute, task?: CoachTask) => void;
   onAddSecondCopy: (appId: string) => void;
+  writeAccess: boolean;
 }) {
   const [demoRunning, setDemoRunning] = useState(false);
   const [demoMessage, setDemoMessage] = useFlashMessage();
@@ -430,22 +530,21 @@ function Dashboard({
   return (
     <section className="dashboard-layout">
       <div className="apps">
-        <RecoveryCoachPanel coach={buildRecoveryCoach(state, summaries)} goTo={goTo} />
-        <ReadinessOverview counts={counts} summaries={orderedSummaries} refresh={refresh} />
-        {hasProtectedData && <RecoveryAnalyticsPanel />}
+        <RecoveryCoachPanel coach={buildRecoveryCoach(state, summaries, { reportDownloaded: Boolean(window.localStorage.getItem(REPORT_KEY)) })} goTo={goTo} />
+        <ReadinessOverview counts={counts} summaries={orderedSummaries} refresh={refresh} writeAccess={writeAccess} />
         {!hasProtectedData && <div className="demo-strip">
           <div>
             <strong>Try a safe demo</strong>
             <span>Watch {brand.name} save sample data, recover it, and check that it worked.</span>
           </div>
-          <button onClick={runDemo} disabled={demoRunning}><Sparkles /> {demoRunning ? "Starting..." : "Run demo"}</button>
+          <button onClick={runDemo} disabled={demoRunning || !writeAccess}><Sparkles /> {demoRunning ? "Starting..." : "Run demo"}</button>
         </div>}
         <FlashBanner message={demoMessage} onDismiss={() => setDemoMessage("")} />
         <div className="section-title">
-          <h2>What BackupProof Is Protecting</h2>
+          <h2>Your backups</h2>
           <div className="filter-tabs" aria-label="Filter protected apps">
             <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>All {counts.total}</button>
-            <button className={filter === "attention" ? "active" : ""} onClick={() => setFilter("attention")}>Needs help {counts.attention}</button>
+            <button className={filter === "attention" ? "active" : ""} onClick={() => setFilter("attention")}>Needs attention {counts.attention}</button>
             <button className={filter === "proven" ? "active" : ""} onClick={() => setFilter("proven")}>Ready {counts.proven}</button>
           </div>
         </div>
@@ -454,10 +553,11 @@ function Dashboard({
         ) : (
           <div className="app-grid">
             {visibleSummaries.map((summary) => (
-              <AppCard key={summary.app.id} summary={summary} refresh={refresh} onAddSecondCopy={() => onAddSecondCopy(summary.app.id)} />
+              <AppCard key={summary.app.id} summary={summary} refresh={refresh} onAddSecondCopy={() => onAddSecondCopy(summary.app.id)} writeAccess={writeAccess} />
             ))}
           </div>
         )}
+        {hasProtectedData && <RecoveryAnalyticsPanel />}
       </div>
       <JobLog jobs={jobs} refresh={refresh} />
     </section>
@@ -527,16 +627,11 @@ function CircleIcon() {
   return <span className="circle-icon" aria-hidden="true" />;
 }
 
-function recentProofDate(summaries: AppSummary[]) {
-  const dates = summaries.map((summary) => summary.restoreProof?.testedAt).filter(Boolean) as string[];
-  if (dates.length === 0) return undefined;
-  return dates.sort((a, b) => b.localeCompare(a))[0];
-}
-
 function RecoveryAnalyticsPanel() {
   const [period, setPeriod] = useState<30 | 90>(30);
   const [analytics, setAnalytics] = useState<RecoveryAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [message, setMessage] = useFlashMessage();
 
   useEffect(() => {
@@ -557,45 +652,64 @@ function RecoveryAnalyticsPanel() {
     setMessage("");
     try {
       await api.download(`/api/analytics/recovery/report?period=${period}`);
-      setMessage("Recovery readiness report downloaded.");
+      setMessage("Report downloaded.");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not download report");
     }
   }
 
   const trendMax = Math.max(1, ...(analytics?.trend.filter((point) => point.hasData).map((point) => point.averageScore) ?? [1]));
+  const lastCheckLabel = !analytics || analytics.summary.averageDaysSinceProof === null
+    ? "Not yet"
+    : analytics.summary.averageDaysSinceProof === 0
+      ? "Today"
+      : `${analytics.summary.averageDaysSinceProof}d ago`;
 
   return (
-    <section className="analytics-panel">
-      <div className="analytics-head">
+    <section className="analytics-panel analytics-compact">
+      <div className="analytics-summary">
         <div>
-          <span className="eyebrow"><TrendingUp /> Recovery analytics</span>
-          <h2>How recovery confidence is trending</h2>
-          <p>Track recovery checks and drills over time so backup trust is not a one-time guess.</p>
+          <span className="eyebrow"><TrendingUp /> Backup health</span>
+          <h2>{loading && !analytics ? "Checking your backups..." : analytics ? recoveryHealthHeadline(analytics) : "Backup health"}</h2>
+          {analytics && <p className="muted">{recoveryHealthSummary(analytics)}</p>}
         </div>
-        <div className="analytics-actions">
-          <div className="filter-tabs" aria-label="Analytics period">
-            <button type="button" className={period === 30 ? "active" : ""} onClick={() => setPeriod(30)}>30 days</button>
-            <button type="button" className={period === 90 ? "active" : ""} onClick={() => setPeriod(90)}>90 days</button>
+        {analytics && (
+          <div className="analytics-summary-stats">
+            <div className="stat-good">
+              <strong>{analytics.summary.provenItems}/{analytics.summary.protectedItems}</strong>
+              <span>Ready to restore</span>
+            </div>
+            <div>
+              <strong>{lastCheckLabel}</strong>
+              <span>Since last test</span>
+            </div>
           </div>
-          <button type="button" className="ghost-button" onClick={() => void downloadReport()}><Download /> Download report</button>
-        </div>
+        )}
       </div>
       <FlashBanner message={message} onDismiss={() => setMessage("")} />
-      {loading && !analytics ? (
-        <p className="muted">Loading recovery analytics...</p>
-      ) : analytics && (
-        <>
-          <div className="analytics-stats">
-            <div><strong>{analytics.summary.averageConfidence}%</strong><span>Average confidence</span></div>
-            <div><strong>{analytics.summary.provenItems}/{analytics.summary.protectedItems}</strong><span>Ready to recover</span></div>
-            <div><strong>{analytics.summary.averageDaysSinceProof ?? "—"}</strong><span>Avg days since check</span></div>
-            <div><strong>{analytics.summary.drillCount}</strong><span>Recovery drills</span></div>
+      {analytics && (
+        <div className="analytics-expand-row">
+          <button type="button" className="ghost-button analytics-toggle" onClick={() => setExpanded((open) => !open)}>
+            {expanded ? <><ChevronUp size={16} /> Hide history</> : <><ChevronDown size={16} /> View backup history</>}
+          </button>
+          {expanded && (
+            <button type="button" className="ghost-button" onClick={() => void downloadReport()}><Download /> Download report</button>
+          )}
+        </div>
+      )}
+      {expanded && analytics && (
+        <div className="analytics-details">
+          <div className="analytics-actions inline">
+            <div className="filter-tabs" aria-label="History period">
+              <button type="button" className={period === 30 ? "active" : ""} onClick={() => setPeriod(30)}>Last 30 days</button>
+              <button type="button" className={period === 90 ? "active" : ""} onClick={() => setPeriod(90)}>Last 90 days</button>
+            </div>
           </div>
+          <p className="muted analytics-details-lead">For people who want the full picture — restore tests and practice recoveries over time.</p>
           <div className="analytics-trend-wrap">
-            <div className="analytics-trend" aria-label="Average recovery confidence by day">
+            <div className="analytics-trend" aria-label="Restore test results by day">
               {analytics.trend.map((point) => (
-                <div className="analytics-bar-wrap" key={point.date} title={`${point.date}: ${point.hasData ? `${point.averageScore}% confidence` : "No checks"}`}>
+                <div className="analytics-bar-wrap" key={point.date} title={`${point.date}: ${point.hasData ? `${point.averageScore}% passed` : "No tests"}`}>
                   <div
                     className={`analytics-bar ${point.hasData ? "has-data" : ""}`}
                     style={{ height: point.hasData ? `${Math.max(8, (point.averageScore / trendMax) * 100)}%` : "6px" }}
@@ -607,31 +721,31 @@ function RecoveryAnalyticsPanel() {
           </div>
           <div className="analytics-grid">
             <div className="analytics-list">
-              <h3>Protected items</h3>
+              <h3>Your protected items</h3>
               {analytics.apps.length === 0 ? (
-                <p className="muted">No protected items yet.</p>
+                <p className="muted">Nothing protected yet.</p>
               ) : analytics.apps.map((app) => (
                 <div className="analytics-row" key={app.appId}>
                   <strong>{app.appName}</strong>
-                  <span>{app.confidenceScore}% confidence</span>
-                  <span>Last check {formatDaysSince(app.lastProofAt)}</span>
+                  <span>{app.restorable ? "Ready to restore" : "Needs a restore test"}</span>
+                  <span>Last test {formatDaysSince(app.lastProofAt)}</span>
                 </div>
               ))}
             </div>
             <div className="analytics-list">
-              <h3>Recovery drill timeline</h3>
+              <h3>Practice recoveries</h3>
               {analytics.drills.length === 0 ? (
-                <p className="muted">No recovery drills in this period yet. Run one from the Recovery page.</p>
-              ) : analytics.drills.slice(0, 8).map((drill) => (
+                <p className="muted">No practice recoveries in this period. Try one from the Recovery page.</p>
+              ) : analytics.drills.slice(0, 6).map((drill) => (
                 <div className="analytics-row" key={`${drill.appId}-${drill.id}`}>
                   <strong>{drill.appName}</strong>
-                  <span>{drill.scenario.replace(/-/g, " ")} · {time(drill.restoredAt)}</span>
-                  <span>Proof {drill.proofStatus} · {drill.confidenceScore}%</span>
+                  <span>{time(drill.restoredAt)}</span>
+                  <span>{drill.proofStatus === "passed" ? "Passed" : "Needs review"}</span>
                 </div>
               ))}
             </div>
           </div>
-        </>
+        </div>
       )}
     </section>
   );
@@ -704,11 +818,13 @@ function FirstRunWizard({
 function ReadinessOverview({
   counts,
   summaries,
-  refresh
+  refresh,
+  writeAccess
 }: {
   counts: ReturnType<typeof readinessCounts>;
   summaries: AppSummary[];
   refresh: () => Promise<void>;
+  writeAccess: boolean;
 }) {
   const next = summaries.find((summary) => readinessAdvice(summary).state !== "proven");
   const advice = next ? readinessAdvice(next) : undefined;
@@ -729,31 +845,26 @@ function ReadinessOverview({
     <section className="readiness-overview">
       <div className="readiness-heading">
         <div>
-          <span className="eyebrow"><Activity /> Recovery readiness</span>
-          <h2>{counts.total === 0 ? "Protect your first app" : counts.attention === 0 ? "Your data is ready to recover" : `${counts.attention} item${counts.attention === 1 ? "" : "s"} need help`}</h2>
-          <p>{counts.total === 0 ? "Choose important files or apps and make the first checked backup." : counts.attention === 0 ? "Every protected app has been restored and checked recently." : "Start with the item that needs the most attention."}</p>
-          {counts.total > 0 && (
-            <p className="recovery-age-callout">
-              Last recovery check: <strong>{formatDaysSince(recentProofDate(summaries))}</strong>
-              {counts.proven < counts.total ? ` · ${counts.total - counts.proven} item${counts.total - counts.proven === 1 ? "" : "s"} still need a fresh check` : ""}
-            </p>
-          )}
+          <span className="eyebrow"><Activity /> At a glance</span>
+          <h2>{counts.total === 0 ? "Protect your first backup" : counts.attention === 0 ? "Everything looks good" : `${counts.attention} item${counts.attention === 1 ? "" : "s"} need${counts.attention === 1 ? "s" : ""} attention`}</h2>
+          <p>{counts.total === 0 ? "Pick files or apps you care about and save the first backup." : counts.attention === 0 ? "BackupProof has tested your backups and they can be restored." : "Fix the item below first — BackupProof will tell you exactly what to do."}</p>
         </div>
         {next && advice && (
           <div className={`next-action ${advice.state}`}>
             <span>Do this next</span>
-            <strong>{next.app.name}: {advice.label}</strong>
+            <strong>{next.app.name}</strong>
             <p>{advice.message}</p>
-            {advice.action && <button onClick={runNext} disabled={running}>{advice.action === "backup" ? <Play /> : <RotateCcw />}{running ? "Starting..." : advice.actionLabel}</button>}
+            {advice.action && <button onClick={runNext} disabled={running || !writeAccess}>{advice.action === "backup" ? <Play /> : <RotateCcw />}{running ? "Starting..." : advice.actionLabel}</button>}
           </div>
         )}
       </div>
-      <div className="readiness-stats">
-        <div><strong>{counts.total}</strong><span>Protected items</span></div>
-        <div className="stat-good"><strong>{counts.proven}</strong><span>Ready to recover</span></div>
-        <div className="stat-warning"><strong>{counts.attention}</strong><span>Need help</span></div>
-        <div className="stat-bad"><strong>{counts.blocked}</strong><span>Blocked</span></div>
-      </div>
+      {counts.total > 0 && (
+        <div className="readiness-stats readiness-stats-compact">
+          <div className="stat-good"><strong>{counts.proven}</strong><span>Ready to restore</span></div>
+          {counts.attention > 0 && <div className="stat-warning"><strong>{counts.attention}</strong><span>Need attention</span></div>}
+          <div><strong>{counts.total}</strong><span>Protected</span></div>
+        </div>
+      )}
     </section>
   );
 }
@@ -768,11 +879,10 @@ function EmptyState() {
   );
 }
 
-function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; refresh: () => Promise<void>; onAddSecondCopy: () => void }) {
+function AppCard({ summary, refresh, onAddSecondCopy, writeAccess }: { summary: AppSummary; refresh: () => Promise<void>; onAddSecondCopy: () => void; writeAccess: boolean }) {
   const [message, setMessage] = useFlashMessage();
   const advice = readinessAdvice(summary);
   const protectedSize = bytes(summary.safety.estimatedSourceBytes);
-  const healthLabel = summary.restorable ? "Ready to recover" : summary.confidenceScore >= 60 ? "Needs a fresh check" : "Needs attention";
   const primaryAction = getPrimaryAppAction(summary, advice);
 
   async function run(type: JobType) {
@@ -833,11 +943,9 @@ function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; r
         <strong>{advice.label}</strong>
         <span>{advice.message}</span>
       </div>
-      <div className="metrics">
-        <div><span>Last saved</span><strong>{time(summary.latestBackup?.finishedAt)}</strong></div>
-        <div><span>Last checked</span><strong>{time(summary.restoreProof?.testedAt)}</strong></div>
-        <div><span>Recovery confidence</span><strong>{healthLabel}</strong></div>
-      </div>
+      <p className="app-timing muted">
+        Last saved {time(summary.latestBackup?.finishedAt)} · Last tested {formatDaysSince(summary.restoreProof?.testedAt)}
+      </p>
       <div className={summary.safety.safe ? "safety-strip safe" : "safety-strip unsafe"}>
         {summary.safety.safe ? <ShieldCheck /> : <AlertTriangle />}
         <div>
@@ -856,7 +964,7 @@ function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; r
         <summary>Technical details</summary>
       <SnapshotTrend history={summary.snapshotHistory} />
       <div className="snapshot-line">Latest backup point: {summary.latestSnapshot?.id ?? "None yet"}</div>
-      <div className="snapshot-line">Backup storage: {summary.repository?.name ?? "Not configured"} · {summary.app.recipeType}</div>
+      <div className="snapshot-line">Backup storage: {summary.repository?.name ?? "Not configured"} · {summary.repository?.type}{summary.repository?.objectLock ? " · Immutable" : ""}</div>
       {(summary.app.secondaryRepositoryIds ?? []).length > 0 && (
         <div className="snapshot-line">Second copy: {(summary.app.secondaryRepositoryIds ?? []).length} extra location{(summary.app.secondaryRepositoryIds ?? []).length === 1 ? "" : "s"}</div>
       )}
@@ -869,7 +977,7 @@ function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; r
         <button
           className="primary-card-action"
           onClick={() => run(primaryAction.type)}
-          disabled={primaryAction.type === "backup" && !summary.safety.safe}
+          disabled={!writeAccess || (primaryAction.type === "backup" && !summary.safety.safe)}
           title={primaryAction.type === "backup" && !summary.safety.safe ? summary.safety.errors.join(" ") : primaryAction.label}
         >
           <primaryAction.Icon /> {primaryAction.label}
@@ -878,21 +986,21 @@ function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; r
           <summary>More actions</summary>
           <div className="more-actions-menu">
             {primaryAction.type !== "backup" && (
-              <button onClick={() => run("backup")} disabled={!summary.safety.safe} title={summary.safety.safe ? "Back up now" : summary.safety.errors.join(" ")}><Play /> Back up now</button>
+              <button onClick={() => run("backup")} disabled={!writeAccess || !summary.safety.safe} title={summary.safety.safe ? "Back up now" : summary.safety.errors.join(" ")}><Play /> Back up now</button>
             )}
-            {primaryAction.type !== "restore-test" && <button onClick={() => run("restore-test")}><RotateCcw /> Check recovery</button>}
-            {primaryAction.type !== "manual-restore" && <button onClick={() => run("manual-restore")}><LifeBuoy /> Recover files</button>}
+            {primaryAction.type !== "restore-test" && <button onClick={() => run("restore-test")} disabled={!writeAccess}><RotateCcw /> Check recovery</button>}
+            {primaryAction.type !== "manual-restore" && <button onClick={() => run("manual-restore")} disabled={!writeAccess}><LifeBuoy /> Recover files</button>}
             <button onClick={downloadLatest} disabled={!summary.latestSnapshot}><Download /> Download a copy</button>
-            <button onClick={onAddSecondCopy}><Cloud /> Add second copy</button>
-            <button onClick={() => run("prune")}><Scissors /> Clean old backups</button>
+            <button onClick={onAddSecondCopy} disabled={!writeAccess}><Cloud /> Add second copy</button>
+            <button onClick={() => run("prune")} disabled={!writeAccess}><Scissors /> Clean old backups</button>
           </div>
         </details>
       </div>
       <details className="advanced-details danger-details">
         <summary>Remove or delete</summary>
         <div className="danger-actions">
-          <button type="button" className="danger" onClick={deleteSnapshots}><Trash2 /> Delete backups</button>
-          <button type="button" className="danger" onClick={removeApp}><Trash2 /> Remove from dashboard</button>
+          <button type="button" className="danger" onClick={deleteSnapshots} disabled={!writeAccess}><Trash2 /> Delete backups</button>
+          <button type="button" className="danger" onClick={removeApp} disabled={!writeAccess}><Trash2 /> Remove from dashboard</button>
         </div>
       </details>
       <FlashBanner message={message} onDismiss={() => setMessage("")} />
@@ -1106,7 +1214,7 @@ function friendlyStorageName(type: WizardVault) {
   }[type];
 }
 
-function ProtectData({ state, refresh }: { state: DashboardState; refresh: () => Promise<void> }) {
+function ProtectData({ state, refresh, writeAccess }: { state: DashboardState; refresh: () => Promise<void>; writeAccess: boolean }) {
   const defaultPolicy = state.policies[0];
   const resticOk = state.environment.resticAvailable ?? false;
   const kopiaOk = state.environment.kopiaAvailable ?? false;
@@ -1949,7 +2057,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
             Next <ChevronRight />
           </button>
         ) : (
-          <button type="button" className="primary" onClick={submit} disabled={saving || completed}>
+          <button type="button" className="primary" onClick={submit} disabled={!writeAccess || saving || completed}>
             <ShieldCheck /> {saving ? "Protecting..." : completed ? "Protected" : "Protect this app"}
           </button>
         )}
@@ -1971,12 +2079,14 @@ function Recovery({
   state,
   summaries,
   refresh,
-  goTo
+  goTo,
+  writeAccess
 }: {
   state: DashboardState;
   summaries: AppSummary[];
   refresh: () => Promise<void>;
   goTo: (route: CoachRoute, task?: CoachTask) => void;
+  writeAccess: boolean;
 }) {
   const [selectedAppId, setSelectedAppId] = useState("");
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
@@ -2498,7 +2608,7 @@ function cadenceToCron(cadence: string, fallback: string) {
   return fallback;
 }
 
-function Schedule({ state, summaries, refresh }: { state: DashboardState; summaries: AppSummary[]; refresh: () => Promise<void> }) {
+function Schedule({ state, summaries, refresh, writeAccess }: { state: DashboardState; summaries: AppSummary[]; refresh: () => Promise<void>; writeAccess: boolean }) {
   const [policyId, setPolicyId] = useState(state.policies[0]?.id ?? "");
   const policy = state.policies.find((item) => item.id === policyId) ?? state.policies[0];
   const [message, setMessage] = useFlashMessage();
@@ -2559,7 +2669,7 @@ function Schedule({ state, summaries, refresh }: { state: DashboardState; summar
           <input name="keepWeekly" type="number" min="0" defaultValue={policy.retention.keepWeekly} placeholder="Weekly snapshots to keep" required />
           <input name="keepMonthly" type="number" min="0" defaultValue={policy.retention.keepMonthly} placeholder="Monthly snapshots to keep" required />
         </WizardSection>
-        <button className="primary"><CalendarClock /> Save schedule</button>
+        <button className="primary" disabled={!writeAccess}><CalendarClock /> Save schedule</button>
         <FlashBanner message={message} onDismiss={() => setMessage("")} />
       </form>
       <aside className="schedule-side">
@@ -2575,7 +2685,7 @@ function Schedule({ state, summaries, refresh }: { state: DashboardState; summar
   );
 }
 
-function Alerts({ state, summaries, refresh }: { state: DashboardState; summaries: AppSummary[]; refresh: () => Promise<void> }) {
+function Alerts({ state, summaries, refresh, writeAccess }: { state: DashboardState; summaries: AppSummary[]; refresh: () => Promise<void>; writeAccess: boolean }) {
   const activeAlerts = state.alerts.filter((alert) => !alert.acknowledgedAt);
   const resolvedAlerts = state.alerts.filter((alert) => alert.acknowledgedAt).slice(0, 8);
 
@@ -2639,7 +2749,7 @@ function Alerts({ state, summaries, refresh }: { state: DashboardState; summarie
   );
 }
 
-function Notifications({ state, refresh, highlightSetup = false }: { state: DashboardState; refresh: () => Promise<void>; highlightSetup?: boolean }) {
+function Notifications({ state, refresh, highlightSetup = false, writeAccess }: { state: DashboardState; refresh: () => Promise<void>; highlightSetup?: boolean; writeAccess: boolean }) {
   const [message, setMessage] = useFlashMessage();
   const [migrateMessage, setMigrateMessage] = useFlashMessage();
   const [alertType, setAlertType] = useState<"email" | "webhook" | "slack" | "discord" | "telegram" | "pagerduty">("email");
@@ -2805,8 +2915,8 @@ function Notifications({ state, refresh, highlightSetup = false }: { state: Dash
             event.preventDefault();
             const form = (event.currentTarget.closest("form") as HTMLFormElement | null);
             if (form) void testDraft(new FormData(form));
-          }} disabled={testing}><Bell /> {testing ? "Sending test..." : "Send test alert"}</button>
-          <button className="primary"><Bell /> Save alerts</button>
+          }} disabled={testing || !writeAccess}><Bell /> {testing ? "Sending test..." : "Send test alert"}</button>
+          <button className="primary" disabled={!writeAccess}><Bell /> Save alerts</button>
         </div>
         <FlashBanner message={message} onDismiss={() => setMessage("")} />
       </form>
@@ -2818,7 +2928,7 @@ function Notifications({ state, refresh, highlightSetup = false }: { state: Dash
         <div className="schedule-app"><strong>Missed schedule</strong><span>When a backup or check does not run on time.</span></div>
         <h2>Weekly recovery summary</h2>
         <p className="muted">Every Monday morning, BackupProof emails a plain-language recovery summary to enabled email targets.</p>
-        <button type="button" className="ghost-button" onClick={() => void sendWeeklySummaryNow()} disabled={weeklySending}>
+        <button type="button" className="ghost-button" onClick={() => void sendWeeklySummaryNow()} disabled={weeklySending || !writeAccess}>
           <Bell /> {weeklySending ? "Sending..." : "Send weekly summary now"}
         </button>
         <h2>Delivery targets</h2>

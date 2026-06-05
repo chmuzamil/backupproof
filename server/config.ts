@@ -1,4 +1,7 @@
 import path from "node:path";
+import { loadEnvFile, parseEnvBoolean, projectRootFromModule } from "./loadEnv";
+
+loadEnvFile(".env", projectRootFromModule(import.meta.url));
 
 export const config = {
   port: Number(process.env.PORT ?? 8787),
@@ -10,7 +13,7 @@ export const config = {
   maxConcurrentJobs: Number(process.env.FRD_MAX_CONCURRENT_JOBS ?? 3),
   nativeEngineMaxBytes: Number(process.env.FRD_NATIVE_MAX_BYTES ?? 5 * 1024 * 1024 * 1024),
   defaultBandwidthLimitKbps: Number(process.env.FRD_BANDWIDTH_LIMIT_KBPS ?? 0),
-  authEnabled: process.env.FRD_AUTH_ENABLED === "true",
+  authEnabled: parseEnvBoolean(process.env.FRD_AUTH_ENABLED),
   oidcIssuer: process.env.FRD_OIDC_ISSUER,
   oidcClientId: process.env.FRD_OIDC_CLIENT_ID,
   oidcClientSecret: process.env.FRD_OIDC_CLIENT_SECRET

@@ -109,6 +109,10 @@ export interface StorageFormPayload {
   googleConnectionId?: string;
 }
 
+export function supportsImmutableStorage(type: RepositoryType) {
+  return type === "s3" || type === "b2";
+}
+
 export function buildRepositoryPayload(input: {
   name: string;
   engine: "frd" | "restic" | "kopia";
@@ -117,7 +121,8 @@ export function buildRepositoryPayload(input: {
   password?: string;
   credentials?: StorageFormCredentials;
   googleConnectionId?: string;
-}): StorageFormPayload {
+  objectLock?: boolean;
+}): StorageFormPayload & { objectLock?: boolean } {
   const credentials = input.type === "sftp"
     ? Object.fromEntries(Object.entries({
         host: input.credentials?.host?.trim() ?? "",
@@ -141,6 +146,7 @@ export function buildRepositoryPayload(input: {
     location: input.location.trim(),
     password: input.password || undefined,
     credentials,
-    googleConnectionId: input.type === "google-drive" ? input.googleConnectionId : undefined
+    googleConnectionId: input.type === "google-drive" ? input.googleConnectionId : undefined,
+    objectLock: supportsImmutableStorage(input.type) ? Boolean(input.objectLock) : undefined
   };
 }

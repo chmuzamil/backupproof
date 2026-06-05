@@ -22,21 +22,21 @@ BackupProof started as a wrapper concept around tools like restic and Kopia, but
 
 The product is currently focused on single-server self-hosted use. Kubernetes, multi-host orchestration, and remote agents are future directions.
 
+**Current release:** v13.x with login UI, Profile page (password + user management), `.env` config loading, simplified dashboard copy, collapsed backup health analytics, immutable storage toggle for S3/B2, and friendly validation errors.
+
 ## Main Pages
 
 ### Dashboard
 
 The Dashboard shows:
 
-- Protected items
-- Last backup
-- Last recovery check
-- Recovery confidence
-- Alerts and next steps
-- A green recovery check only when recovery has been proven
-- An activity log at the bottom
+- Recovery Coach checklist with one best next step
+- **At a glance** status in plain language (ready vs needs attention)
+- Protected backup cards with simple timing (“Last saved … · Last tested …”)
+- Compact **Backup health** summary at the bottom (collapsed by default; expand for charts and history)
+- An activity log on the right / bottom
 
-The dashboard intentionally keeps technical details behind expandable sections.
+Technical metrics (confidence %, drill timelines, bar charts) stay behind **View backup history**. Assume non-technical users never expand that section unless they ask.
 
 ### Protect Data
 
@@ -49,47 +49,44 @@ The flow is:
 3. Pick a recovery check
 4. Finish
 
-It supports:
-
-- Personal folders
-- Manually selected files and folders
-- A small file browser for choosing folders and files without typing paths
-- Self-hosted app folders
-- Docker Compose projects
-- PostgreSQL databases
-- MySQL and MariaDB databases
-- CMS websites: WordPress, Drupal, Joomla, Ghost, and Nextcloud
-
-The simple mode scans for common folders and discovered websites. Long technical lists, such as running services, should be hidden behind accordions or advanced sections.
-
-The file browser lists one folder at a time and lets users add either the current folder or a specific file. It should remain compact, friendly, and secondary to the main "Help me choose" flow.
-
-When a CMS is detected, BackupProof should offer a plain action such as **Protect this website** or **Protect site and database**. That action should fill in the site folder and database settings when safely available. Database passwords must not be displayed if discovered from config files or container environment variables.
+It supports storage presets (this computer, USB, Google Drive, SFTP, S3, B2), test connection before saving, optional second copy, and immutable storage toggle for S3/B2.
 
 ### Recovery
 
 The Recovery page helps users restore data without needing to understand backup internals.
 
-It supports:
-
-- Choosing an item to recover
-- Choosing a backup point
-- Running a preflight check
-- Restoring all files or selected files
-- Downloading a portable backup package
-- Importing a downloaded backup package
-- Saving trusted restore destinations
-- Running recovery drills
-- Creating recovery reports and evidence bundles
-- Downloading a recovery kit for moving BackupProof to a new server
+It supports restore preflight, selected file restore, portable packages, recovery drills, runbooks, and evidence bundles.
 
 ### Schedule
 
-The Schedule page controls backup and recovery-check timing, retention, and related policy choices.
+Controls backup and recovery-check timing, retention, and related policy choices.
 
 ### Alerts / Notifications
 
-BackupProof supports email and webhook notifications plus Slack, Discord, Telegram, and PagerDuty target types. Alerts cover failed backups, failed recovery checks, stale proof, missed schedules, storage problems, and credential/configuration issues.
+Email, Slack, Discord, Telegram, webhook, and PagerDuty targets. Includes send-test alerts, friendly templates, weekly recovery summary email (Mondays), and coach deep-link into alert setup. Does **not** include password or user management — that lives on **Profile**.
+
+### Profile
+
+Visible when `FRD_AUTH_ENABLED=true` and the user is signed in.
+
+- **Change password** — current + new + confirm; minimum 5 characters
+- **User management** (admin only) — list users, create accounts, change roles, delete users (cannot delete self or last admin)
+
+Sidebar link **Profile** and top-bar username both open this page.
+
+### Authentication
+
+When `FRD_AUTH_ENABLED=true`:
+
+- Login screen with username/password
+- Default sign-in `admin` / `admin` until changed
+- First-run admin bootstrap flow (replaces default admin)
+- Optional OIDC SSO when issuer/client env vars are set
+- Sign out from the top bar
+- Viewer/auditor roles are read-only in the UI
+- Password hashes use `backupproof-auth-v1:` scheme (not tied to `FRD_ENCRYPTION_KEY`); legacy hashes migrate on login
+
+Config loads from `.env` in project root via `server/loadEnv.ts`. See `.env.example`.
 
 ## Backup And Recovery Concepts
 
@@ -99,7 +96,7 @@ The built-in engine is the default. It supports encrypted backup data, manifests
 
 ### Recovery Proof
 
-A recovery proof means BackupProof restored a backup and verified it. Verification can include file checks, text checks, HTTP checks, database checks, and checksum comparison after restore.
+A recovery proof means BackupProof restored a backup and verified it.
 
 ### Green Check Meaning
 
@@ -108,63 +105,50 @@ The green check does not mean "a backup job succeeded." It means the latest elig
 ## Important UX Principles
 
 - Use plain language first.
-- Prefer "Protect data", "Check recovery", "Recover files", and "Download a copy" over technical labels.
-- Keep advanced details behind accordions or details sections.
-- Avoid showing long service or container lists by default.
+- Prefer "Protect data", "Check recovery", "Recover files", "Ready to restore", and "Download a copy" over technical labels.
+- Avoid leading with "confidence score", "analytics", "drill", or "proof" in primary UI copy.
+- Keep advanced details behind accordions, collapsed sections, or **View backup history**.
 - Give one clear next action when possible.
 - Assume users may not know what Docker, mounts, cron, snapshots, or database dumps mean.
-- Technical users should still have access to advanced fields and logs.
 
 ## Important Security Principles
 
 - Credentials are encrypted at rest.
 - Do not display discovered database passwords.
 - Do not place local backup storage inside the folders being protected.
-- Validate restore/archive paths before extraction.
 - Treat the BackupProof data directory and encryption key as sensitive.
-- Recovery kits are encrypted with a separate passphrase.
+- Enable `FRD_AUTH_ENABLED` for anything beyond trusted homelab use.
+- Change default admin password after first login via Profile.
 
 ## Key Code Areas
 
-- `src/`: React web UI
-- `server/`: Express API, backup engines, jobs, discovery, recovery flows
-- `shared/`: Shared types, schemas, product copy, readiness and recovery helpers
-- `tests/`: Vitest test suite
-- `cli/`: Command-line interface
-
-Relevant current discovery code:
-
-- `server/discovery.ts`: host, service, Docker, database, and CMS discovery
-- `server/api.ts`: `/api/filesystem/browse` endpoint for the Protect Data file browser
-- `shared/types.ts`: `DiscoveryResult`, `DiscoveredCmsApp`, and related types
-- `src/main.tsx`: Protect Data wizard and user-facing discovery UI
+- `src/main.tsx` — Dashboard, wizards, most pages
+- `src/auth.tsx` — Login screen, session token, role helpers
+- `src/profile.tsx` — Password change and user management UI
+- `src/storageSetup.tsx` — Storage presets and second-copy modal
+- `server/api.ts` — REST routes including auth and users
+- `server/auth.ts` — Password hashing, sessions, RBAC
+- `server/loadEnv.ts` — `.env` file loading
+- `shared/schemas.ts` — Zod validation (`MIN_PASSWORD_LENGTH = 5`)
+- `shared/validation.ts` — Friendly Zod error formatting
+- `shared/recoveryAnalytics.ts` — Analytics data + plain-language health copy
+- `tests/` — Vitest test suite
 
 ## Development Commands
 
 ```bash
+cp .env.example .env
 npm install
 npm run dev
 npm test
 npm run build
-npm audit --omit=dev
 ```
 
-Development UI:
-
-```text
-http://localhost:5173
-```
-
-Production UI:
-
-```text
-http://localhost:8787
-```
+Development UI: `http://localhost:5173` (API proxied to `8787`)  
+Production UI: `http://localhost:8787`
 
 ## Current Quality Baseline
 
-At the time this file was added:
-
-- 20 test files pass
-- 58 tests pass
+- 28 test files pass
+- 77 tests pass
 - Production dependency audit reports 0 vulnerabilities

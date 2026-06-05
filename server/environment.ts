@@ -40,6 +40,7 @@ export async function checkEnvironment(): Promise<EnvironmentStatus> {
     kopiaVersion: engines.kopiaVersion,
     resticPath: engines.resticPath,
     kopiaPath: engines.kopiaPath,
-    availableEngines
+    availableEngines,
+    authEnabled: config.authEnabled
   };
 }

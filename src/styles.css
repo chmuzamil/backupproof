@@ -3026,6 +3026,82 @@ textarea {
   padding: 18px;
 }
 
+.analytics-compact {
+  margin-top: 8px;
+}
+
+.analytics-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.analytics-summary h2 {
+  margin: 6px 0;
+  font-size: 20px;
+}
+
+.analytics-summary-stats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.analytics-summary-stats div {
+  background: #f7faf7;
+  border: 1px solid #e2eae2;
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-width: 110px;
+}
+
+.analytics-summary-stats strong {
+  display: block;
+  font-size: 20px;
+}
+
+.analytics-summary-stats span {
+  color: #647069;
+  font-size: 12px;
+}
+
+.analytics-expand-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.analytics-toggle {
+  font-weight: 600;
+}
+
+.analytics-details {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #edf1ed;
+}
+
+.analytics-details-lead {
+  margin: 10px 0 14px;
+  font-size: 14px;
+}
+
+.analytics-actions.inline {
+  margin-bottom: 4px;
+}
+
+.readiness-stats-compact {
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
+  justify-content: start;
+}
+
+.app-timing {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
 .analytics-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3201,11 +3277,200 @@ textarea {
 @media (max-width: 900px) {
   .analytics-head,
   .analytics-grid,
-  .analytics-stats {
+  .analytics-stats,
+  .analytics-summary {
     grid-template-columns: 1fr;
   }
 
   .analytics-actions {
     align-items: stretch;
   }
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: linear-gradient(180deg, #f4faf4 0%, #eef3ee 100%);
+}
+
+.login-card {
+  width: min(460px, 100%);
+  background: #fff;
+  border: 1px solid #dce4dc;
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 18px 40px rgb(15 26 20 / 8%);
+}
+
+.login-brand {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.login-card h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.login-lead,
+.login-note {
+  color: #647069;
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.login-form label span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-sso,
+.topbar-logout {
+  margin-top: 12px;
+}
+
+.login-default-banner {
+  margin-bottom: 12px;
+}
+
+.topbar-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.immutable-storage-panel {
+  border: 1px solid #e2eae2;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fbfdfb;
+}
+
+.immutable-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.immutable-toggle strong {
+  display: block;
+}
+
+.immutable-toggle span,
+.immutable-warning,
+.immutable-note {
+  color: #647069;
+  font-size: 13px;
+}
+
+.immutable-warning {
+  margin: 10px 0 0;
+  color: #9a6700;
+}
+
+.immutable-note {
+  margin: 10px 0 0;
+}
+
+.account-form {
+  margin-bottom: 16px;
+}
+
+.profile-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.profile-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-size: 1.5rem;
+}
+
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-card {
+  margin: 0;
+}
+
+.profile-user-table-wrap {
+  overflow-x: auto;
+}
+
+.profile-user-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.profile-user-table th,
+.profile-user-table td {
+  padding: 12px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.profile-user-table th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.profile-user-table select {
+  min-width: 130px;
+}
+
+.profile-role-note,
+.role-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.85rem;
+}
+
+.profile-you {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.profile-user-actions {
+  white-space: nowrap;
+}
+
+.profile-pill {
+  border: none;
+  cursor: pointer;
+}
+
+.profile-pill:hover {
+  filter: brightness(0.98);
 }

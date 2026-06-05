@@ -2,6 +2,10 @@ import { readinessAdvice } from "./readiness";
 import type { AppSummary, DashboardState } from "./types";
 
 export type CoachRoute = "dashboard" | "protect" | "recovery" | "settings";
+
+export interface RecoveryCoachOptions {
+  reportDownloaded?: boolean;
+}
 export type CoachTaskStatus = "done" | "todo" | "warning";
 
 export interface CoachTask {
@@ -34,7 +38,7 @@ function hasOffsiteStorage(state: DashboardState) {
     state.apps.some((app) => (app.secondaryRepositoryIds ?? []).length > 0);
 }
 
-export function buildRecoveryCoach(state: DashboardState, summaries: AppSummary[]): RecoveryCoach {
+export function buildRecoveryCoach(state: DashboardState, summaries: AppSummary[], options: RecoveryCoachOptions = {}): RecoveryCoach {
   const hasProtectedData = summaries.length > 0;
   const hasBackups = allAppsHaveBackups(summaries);
   const hasCheckedBackups = allAppsAreChecked(summaries);
@@ -42,6 +46,8 @@ export function buildRecoveryCoach(state: DashboardState, summaries: AppSummary[
   const hasAlerts = state.notificationTargets.some((target) => target.enabled);
   const hasRestorePlace = state.restoreDestinationTemplates.length > 0;
   const hasOffsite = hasOffsiteStorage(state);
+  const allProven = hasProtectedData && summaries.every((summary) => summary.restorable);
+  const reportDownloaded = Boolean(options.reportDownloaded);
 
   const tasks: CoachTask[] = [
     {
@@ -103,7 +109,17 @@ export function buildRecoveryCoach(state: DashboardState, summaries: AppSummary[
       status: hasRestorePlace ? "done" : "todo",
       route: "recovery",
       actionLabel: hasRestorePlace ? "Open recovery" : "Save restore place"
-    }
+    },
+    ...(allProven || reportDownloaded ? [{
+      id: "recovery-report",
+      title: reportDownloaded ? "Recovery report saved" : "Download a recovery readiness report",
+      description: reportDownloaded
+        ? "You have a markdown report you can share with your team or keep offline."
+        : "Save a simple report showing confidence scores, checks, and recent recovery drills.",
+      status: (reportDownloaded ? "done" : "todo") as CoachTaskStatus,
+      route: "dashboard" as CoachRoute,
+      actionLabel: reportDownloaded ? "Download again" : "Download report"
+    }] : [])
   ];
 
   const completed = tasks.filter((task) => task.status === "done").length;

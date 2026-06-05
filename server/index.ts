@@ -42,5 +42,6 @@ app.use((_req, res) => {
 });
 
 app.listen(config.port, () => {
-  console.log(`${brand.name} listening on ${config.port}`);
+  const authNote = config.authEnabled ? " · auth enabled" : "";
+  console.log(`${brand.name} listening on ${config.port}${authNote}`);
 });

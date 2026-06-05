@@ -1,4 +1,5 @@
 import express from "express";
+import { ZodError } from "zod";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -11,6 +12,8 @@ import {
   agentRegisterSchema,
   appInputSchema,
   drRunSchema,
+  bootstrapInputSchema,
+  changePasswordInputSchema,
   loginInputSchema,
   notificationInputSchema,
   notificationTestInputSchema,
@@ -18,12 +21,14 @@ import {
   repositoryInputSchema,
   restoreDestinationTemplateInputSchema,
   secondaryStorageInputSchema,
-  userInputSchema
+  userInputSchema,
+  userRoleUpdateSchema
 } from "../shared/schemas";
+import { formatZodError } from "../shared/validation";
 import { deleteAllSnapshots, deleteApp } from "./appMaintenance";
 import { auditExport, recordAudit } from "./auditLog";
 import { auditAlerts } from "./alertAudit";
-import { authMiddleware, createSession, destroySession, requireRole, verifyPassword } from "./auth";
+import { authMiddleware, createSession, destroySession, isDefaultAdminSetup, requireRole, resolveUserFromToken, usesLegacyPasswordHash, verifyPassword } from "./auth";
 import { inspectBackupSafetyCached } from "./backupSafety";
 import { config } from "./config";
 import { enrichSummary } from "./confidenceScore";
@@ -95,20 +100,82 @@ async function fileBrowserRoots(): Promise<FileBrowserEntry[]> {
   return roots;
 }
 
+function publicUser(user: User) {
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    createdAt: user.createdAt
+  };
+}
+
 export function createApi(store: Store, runner: JobRunner, broadcast: () => void) {
   const router = express.Router();
-  const auth = authMiddleware(store.snapshot().users);
+  const auth = authMiddleware(() => store.snapshot().users);
 
-  router.get("/auth/oidc/login", (_req, res) => {
+  router.get("/auth/status", (req, res) => {
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+    const user = resolveUserFromToken(() => store.snapshot().users, token);
+    res.json({
+      authEnabled: config.authEnabled,
+      oidcAvailable: Boolean(config.oidcIssuer && config.oidcClientId),
+      setupRequired: config.authEnabled && isDefaultAdminSetup(store.snapshot().users),
+      user: user ? { id: user.id, username: user.username, role: user.role } : null
+    });
+  });
+
+  router.get("/auth/oidc/login", (req, res) => {
     if (!config.oidcIssuer || !config.oidcClientId) {
       return res.status(501).json({ error: "OIDC is not configured. Set FRD_OIDC_ISSUER and FRD_OIDC_CLIENT_ID." });
     }
-    const redirect = `${config.oidcIssuer}/authorize?client_id=${encodeURIComponent(config.oidcClientId)}&response_type=code&scope=openid`;
+    const redirectUri = `${req.protocol}://${req.get("host")}/api/auth/oidc/callback`;
+    const redirect = `${config.oidcIssuer.replace(/\/$/, "")}/authorize?${new URLSearchParams({
+      client_id: config.oidcClientId,
+      response_type: "code",
+      scope: "openid profile email",
+      redirect_uri: redirectUri
+    }).toString()}`;
     res.json({ redirect });
   });
 
-  router.get("/auth/oidc/callback", (_req, res) => {
-    res.status(501).json({ error: "OIDC callback handler requires provider-specific token exchange. Configure per your IdP." });
+  router.get("/auth/oidc/callback", async (req, res, next) => {
+    try {
+      if (!config.authEnabled) throw new Error("Authentication is not enabled.");
+      if (!config.oidcIssuer || !config.oidcClientId || !config.oidcClientSecret) {
+        throw new Error("OIDC is not fully configured.");
+      }
+      const code = String(req.query.code ?? "");
+      if (!code) throw new Error("OIDC sign-in was cancelled or incomplete.");
+      const redirectUri = `${req.protocol}://${req.get("host")}/api/auth/oidc/callback`;
+      const issuer = config.oidcIssuer.replace(/\/$/, "");
+      const tokenResponse = await fetch(`${issuer}/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          client_id: config.oidcClientId,
+          client_secret: config.oidcClientSecret,
+          redirect_uri: redirectUri
+        })
+      });
+      const tokenBody = await tokenResponse.json() as { access_token?: string; error?: string };
+      if (!tokenResponse.ok || !tokenBody.access_token) {
+        throw new Error(tokenBody.error ?? "OIDC token exchange failed.");
+      }
+      const userInfoResponse = await fetch(`${issuer}/userinfo`, {
+        headers: { authorization: `Bearer ${tokenBody.access_token}` }
+      });
+      const profile = await userInfoResponse.json() as { email?: string; preferred_username?: string; sub?: string };
+      const username = profile.preferred_username ?? profile.email ?? profile.sub;
+      if (!username) throw new Error("OIDC profile did not include a username or email.");
+      const user = await store.findOrCreateOidcUser(username);
+      const sessionToken = createSession(user);
+      await recordAudit(store, "auth.oidc", `User ${user.username} signed in with OIDC`, user);
+      res.redirect(`/?auth=${encodeURIComponent(sessionToken)}`);
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get("/docs/openapi.json", (_req, res) => {
@@ -140,12 +207,31 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.post("/auth/bootstrap", async (req, res, next) => {
+    try {
+      if (!config.authEnabled) throw new Error("Authentication is not enabled.");
+      if (!isDefaultAdminSetup(store.snapshot().users)) throw new Error("The admin account was already configured.");
+      const input = bootstrapInputSchema.parse(req.body);
+      const admin = store.snapshot().users[0];
+      if (!admin) throw new Error("No admin account found.");
+      const user = await store.updateUserCredentials(admin.id, input.username, input.password);
+      const token = createSession(user);
+      await recordAudit(store, "auth.bootstrap", `Configured admin account ${user.username}`, user);
+      res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/auth/login", async (req, res, next) => {
     try {
       const input = loginInputSchema.parse(req.body);
       const user = store.findUserByUsername(input.username);
       if (!user || !verifyPassword(input.password, user.passwordHash)) {
         return res.status(401).json({ error: "Invalid credentials" });
+      }
+      if (usesLegacyPasswordHash(input.password, user.passwordHash)) {
+        await store.updateUserPassword(user.id, input.password);
       }
       const token = createSession(user);
       await recordAudit(store, "auth.login", `User ${user.username} logged in`, user);
@@ -161,6 +247,21 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     res.json({ ok: true });
   });
 
+  router.post("/auth/password", auth, async (req, res, next) => {
+    try {
+      if (!req.user) throw new Error("Authentication required.");
+      const input = changePasswordInputSchema.parse(req.body);
+      if (!verifyPassword(input.currentPassword, req.user.passwordHash)) {
+        return res.status(401).json({ error: "Current password is incorrect." });
+      }
+      await store.updateUserPassword(req.user.id, input.newPassword);
+      await recordAudit(store, "auth.password", `User ${req.user.username} changed their password`, req.user);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/users", auth, async (req, res, next) => {
     try {
       if (req.user) requireRole(req.user.role, "admin");
@@ -168,7 +269,53 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
       const user = await store.addUser(input);
       await recordAudit(store, "user.create", `Created user ${user.username}`, req.user);
       broadcast();
-      res.status(201).json({ id: user.id, username: user.username, role: user.role });
+      res.status(201).json(publicUser(user));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/users", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "admin");
+      res.json(store.snapshot().users.map(publicUser));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/users/:id", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "admin");
+      const input = userRoleUpdateSchema.parse(req.body);
+      const target = store.snapshot().users.find((user) => user.id === req.params.id);
+      if (!target) throw new Error("User not found");
+      if (target.id === req.user?.id && input.role !== "admin" && store.adminCount() <= 1) {
+        throw new Error("You cannot remove the last admin role from your account.");
+      }
+      if (target.role === "admin" && input.role !== "admin" && store.adminCount() <= 1) {
+        throw new Error("At least one admin account is required.");
+      }
+      const user = await store.updateUserRole(target.id, input.role);
+      await recordAudit(store, "user.role", `Changed ${user.username} role to ${user.role}`, req.user);
+      broadcast();
+      res.json(publicUser(user));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/users/:id", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "admin");
+      const target = store.snapshot().users.find((user) => user.id === req.params.id);
+      if (!target) throw new Error("User not found");
+      if (target.id === req.user?.id) throw new Error("You cannot delete your own account.");
+      if (target.role === "admin" && store.adminCount() <= 1) throw new Error("At least one admin account is required.");
+      const user = await store.deleteUser(target.id);
+      await recordAudit(store, "user.delete", `Deleted user ${user.username}`, req.user);
+      broadcast();
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
@@ -950,6 +1097,9 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
   });
 
   router.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (error instanceof ZodError) {
+      return res.status(400).json({ error: formatZodError(error) });
+    }
     const message = error instanceof Error ? error.message : "Unknown API error";
     res.status(400).json({ error: message });
   });

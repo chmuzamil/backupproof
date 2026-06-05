@@ -203,6 +203,27 @@ export interface EnvironmentStatus {
   resticPath?: string;
   kopiaPath?: string;
   availableEngines?: BackupEngine[];
+  authEnabled?: boolean;
+}
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: UserRole;
+}
+
+export interface UserSummary {
+  id: string;
+  username: string;
+  role: UserRole;
+  createdAt: string;
+}
+
+export interface AuthStatus {
+  authEnabled: boolean;
+  oidcAvailable: boolean;
+  setupRequired: boolean;
+  user: AuthUser | null;
 }
 
 export interface DashboardState {

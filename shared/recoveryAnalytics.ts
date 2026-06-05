@@ -170,3 +170,31 @@ export function buildRecoveryReadinessReport(analytics: RecoveryAnalytics): stri
   lines.push("", "— BackupProof");
   return lines.join("\n");
 }
+
+export function recoveryHealthHeadline(analytics: RecoveryAnalytics): string {
+  const { provenItems, protectedItems } = analytics.summary;
+  if (protectedItems === 0) return "Nothing protected yet";
+  if (provenItems === protectedItems) {
+    return protectedItems === 1
+      ? "Your backup is ready to restore"
+      : "All your backups are ready to restore";
+  }
+  const needHelp = protectedItems - provenItems;
+  return `${needHelp} backup${needHelp === 1 ? "" : "s"} still need a check`;
+}
+
+export function recoveryHealthSummary(analytics: RecoveryAnalytics): string {
+  const { provenItems, protectedItems, averageDaysSinceProof } = analytics.summary;
+  if (protectedItems === 0) {
+    return "Add something important in Protect data to start.";
+  }
+  const readyLine = provenItems === protectedItems
+    ? `All ${protectedItems} protected item${protectedItems === 1 ? "" : "s"} passed a recent restore test.`
+    : `${provenItems} of ${protectedItems} protected item${protectedItems === 1 ? "" : "s"} passed a recent restore test.`;
+  const checkLine = averageDaysSinceProof === null
+    ? "No restore test has run yet."
+    : averageDaysSinceProof === 0
+      ? "The last restore test ran today."
+      : `The last restore test ran about ${averageDaysSinceProof} day${averageDaysSinceProof === 1 ? "" : "s"} ago.`;
+  return `${readyLine} ${checkLine}`;
+}

@@ -102,7 +102,7 @@ describe("recovery coach", () => {
         createdAt: "",
         updatedAt: ""
       }]
-    }), [readySummary]);
+    }), [readySummary], { reportDownloaded: true });
 
     expect(coach.score).toBe(100);
     expect(coach.nextTask).toBeUndefined();

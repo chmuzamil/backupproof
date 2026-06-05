@@ -4,6 +4,8 @@ services:
     build: .
     ports:
       - "8787:8787"
+    env_file:
+      - .env
     environment:
       FRD_DATA_DIR: /data
       FRD_ENCRYPTION_KEY: change-me-to-a-32-byte-secret-value

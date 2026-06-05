@@ -14,9 +14,11 @@ import {
   buildRepositoryPayload,
   friendlyStorageLabel,
   storageLocationHint,
+  supportsImmutableStorage,
   type StorageFormCredentials,
   type StoragePresetId
 } from "../shared/storageSetup";
+import { authFetch } from "./auth";
 
 export interface StorageFormState {
   presetId: StoragePresetId | "";
@@ -24,6 +26,7 @@ export interface StorageFormState {
   repoType: RepositoryType;
   repoLocation: string;
   repoPassword: string;
+  objectLock: boolean;
   credentials: StorageFormCredentials;
   googleClientId: string;
   googleClientSecret: string;
@@ -38,6 +41,7 @@ export function createStorageFormState(defaults?: Partial<StorageFormState>): St
     repoType: defaults?.repoType ?? "local",
     repoLocation: defaults?.repoLocation ?? ".data/vaults/secondary",
     repoPassword: "",
+    objectLock: defaults?.objectLock ?? false,
     credentials: {},
     googleClientId: "",
     googleClientSecret: "",
@@ -67,7 +71,8 @@ function buildPayload(state: StorageFormState, engine: "frd" | "restic" | "kopia
     location: state.repoLocation,
     password: state.repoPassword || undefined,
     credentials: state.credentials,
-    googleConnectionId: state.googleConnectionId || undefined
+    googleConnectionId: state.googleConnectionId || undefined,
+    objectLock: state.objectLock
   });
 }
 
@@ -156,7 +161,7 @@ export function StorageLocationForm({
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch("/api/repositories/test", {
+      const res = await authFetch("/api/repositories/test", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(buildPayload(state, engine))
@@ -255,6 +260,28 @@ export function StorageLocationForm({
         </div>
       )}
 
+      {supportsImmutableStorage(state.repoType) && (
+        <div className="immutable-storage-panel">
+          <label className="immutable-toggle">
+            <input
+              type="checkbox"
+              checked={state.objectLock}
+              onChange={(e) => setState((current) => ({ ...current, objectLock: e.target.checked }))}
+            />
+            <div>
+              <strong>Protect backups from deletion (immutable storage)</strong>
+              <span>Use S3 Object Lock or B2 bucket immutability so ransomware or mistakes cannot erase recent backup copies.</span>
+            </div>
+          </label>
+          {!state.objectLock && (
+            <p className="immutable-warning">This cloud bucket will stay mutable. That is fine for testing, but less safe for long-term recovery copies.</p>
+          )}
+          {state.objectLock && (
+            <p className="immutable-note">Your bucket must have Object Lock or immutability enabled. BackupProof stores this preference and uses it with Restic-backed vaults.</p>
+          )}
+        </div>
+      )}
+
       {state.repoType === "google-drive" && (
         <div className="wizard-subpanel">
           <h4>Google Drive connection</h4>
@@ -313,7 +340,7 @@ export function SecondStorageModal({
     setSaving(true);
     setMessage("");
     try {
-      await fetch(`/api/apps/${app.id}/secondary-storage`, {
+      await authFetch(`/api/apps/${app.id}/secondary-storage`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(mode === "existing"

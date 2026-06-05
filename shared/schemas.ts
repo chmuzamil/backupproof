@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Matches the default admin password length; keeps first-login and change-password rules aligned. */
+export const MIN_PASSWORD_LENGTH = 5;
+
 export const healthCheckSchema = z.object({
   id: z.string().optional(),
   type: z.enum(["file", "http", "container", "database"]),
@@ -85,6 +88,24 @@ export const restoreDestinationTemplateInputSchema = z.object({
   appId: z.string().optional()
 });
 
+export const bootstrapInputSchema = z.object({
+  username: z.string().min(3),
+  password: z.string().min(MIN_PASSWORD_LENGTH),
+  confirmPassword: z.string().min(MIN_PASSWORD_LENGTH)
+}).refine((input) => input.password === input.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"]
+});
+
+export const changePasswordInputSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(MIN_PASSWORD_LENGTH),
+  confirmPassword: z.string().min(MIN_PASSWORD_LENGTH)
+}).refine((input) => input.newPassword === input.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"]
+});
+
 export const loginInputSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1)
@@ -92,8 +113,12 @@ export const loginInputSchema = z.object({
 
 export const userInputSchema = z.object({
   username: z.string().min(3),
-  password: z.string().min(8),
+  password: z.string().min(MIN_PASSWORD_LENGTH),
   role: z.enum(["admin", "operator", "viewer", "auditor"]).default("operator")
+});
+
+export const userRoleUpdateSchema = z.object({
+  role: z.enum(["admin", "operator", "viewer", "auditor"])
 });
 
 export const agentRegisterSchema = z.object({

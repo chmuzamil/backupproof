@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildConfidenceTrend, buildRecoveryAnalytics, buildRecoveryReadinessReport, daysSince, formatDaysSince } from "../shared/recoveryAnalytics";
+import { buildConfidenceTrend, buildRecoveryAnalytics, buildRecoveryReadinessReport, daysSince, formatDaysSince, recoveryHealthHeadline, recoveryHealthSummary } from "../shared/recoveryAnalytics";
 import type { AppSummary, DrReportSummary, RestoreProof } from "../shared/types";
 
 const now = Date.parse("2026-06-04T12:00:00.000Z");
@@ -90,5 +90,29 @@ describe("recovery analytics", () => {
     const report = buildRecoveryReadinessReport(analytics);
     expect(report).toContain("Family photos");
     expect(report).toContain("lost-server");
+  });
+
+  it("builds plain-language health copy for the dashboard", () => {
+    const allGood = buildRecoveryAnalytics({
+      summaries: [summary("photos", "Family photos")],
+      restoreProofs: [],
+      drills: [],
+      periodDays: 30,
+      now
+    });
+    expect(recoveryHealthHeadline(allGood)).toBe("Your backup is ready to restore");
+    expect(recoveryHealthSummary(allGood)).toContain("passed a recent restore test");
+
+    const needsHelp = buildRecoveryAnalytics({
+      summaries: [
+        summary("photos", "Family photos"),
+        summary("docs", "Documents", { restorable: false, restoreProof: undefined, confidenceScore: 20 })
+      ],
+      restoreProofs: [],
+      drills: [],
+      periodDays: 30,
+      now
+    });
+    expect(recoveryHealthHeadline(needsHelp)).toBe("1 backup still need a check");
   });
 });

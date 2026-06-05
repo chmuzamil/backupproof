@@ -23,16 +23,16 @@ BackupProof is designed for both non-technical and technical self-hosters:
 
 ## Current Version
 
-**v12.0.0** completes the “Can I actually get my data back?” promise with friendlier setup and recovery visibility:
+**v13.0.0** adds sign-in, profile management, and a simpler dashboard for non-technical users:
 
-- **Non-technical storage setup** — presets for this computer, USB drive, Google Drive, SFTP, S3, and Backblaze B2
-- **Test storage before saving** — validate a location before the first backup runs
-- **Second copy wizard** — add offsite or mirrored storage during Protect Data or from the Dashboard coach
-- **Notification polish** — plain-language alert copy, type-specific forms, and send-test before save
-- **Recovery analytics** — 30/90-day confidence trends, drill timeline, and downloadable readiness reports
-- **Weekly recovery summary** — Monday email digest to enabled email targets
-- **First-run setup wizard** — welcome flow for protect → demo → alerts on a fresh install
-- **Recovery Coach deep-links** — “Turn on alerts” and “Add second copy” open the right setup flow
+- **Login and sessions** — sign-in screen when `FRD_AUTH_ENABLED=true`, default admin bootstrap, optional OIDC SSO, sign out
+- **Profile page** — change your password and manage users (admin: add, change roles, delete)
+- **`.env` support** — load config from project root; Docker Compose uses `env_file: .env`
+- **Simpler dashboard** — plain-language “At a glance” status, compact collapsed **Backup health** section (charts and history behind “View backup history”)
+- **Immutable storage UI** — optional object lock toggle for S3 and Backblaze B2 vaults
+- **Friendlier validation** — readable password and form errors instead of raw JSON
+
+v12 foundations still included: storage presets, second-copy wizard, recovery analytics reports, weekly summary emails, Recovery Coach deep-links, first-run wizard, and notification polish.
 
 v11 foundations still included: Recovery Coach, built-in engine, Google Drive/SFTP/S3/B2/local storage, portable backups, recovery kit, drills, runbooks, evidence bundles, and CMS discovery.
 
@@ -47,11 +47,20 @@ BackupProof treats a backup as ready only after it has been restored and checked
 ### Friendly Dashboard
 
 - Shows what data is protected
-- Shows the last backup and last recovery check
-- Highlights items that need help first
-- Gives a plain-language next step
-- Keeps technical details behind expandable sections
+- Shows the last backup and last recovery check in plain language
+- Highlights items that need attention first
+- Gives one clear next step via Recovery Coach
+- Keeps charts, confidence scores, and technical details collapsed or behind expandable sections
 - Moves the activity log to the bottom of the page
+
+### Profile (when sign-in is enabled)
+
+Open **Profile** from the sidebar or click your username in the top bar:
+
+- **Change password** — update the password you use to sign in
+- **User management** (admin only) — add users, change roles, remove accounts
+
+Default sign-in is `admin` / `admin` until you change it. Passwords must be at least 5 characters.
 
 ### Recovery Coach
 
@@ -66,15 +75,13 @@ The Recovery Coach turns backup safety into a simple checklist:
 
 It gives a readiness score, one best next step, and deep-links into storage and alert setup so users are not left guessing.
 
-### Recovery Analytics
+### Backup Health (Dashboard)
 
-The Dashboard shows lightweight recovery analytics when items are protected:
+When items are protected, the Dashboard shows a compact **Backup health** summary:
 
-- Average confidence and “days since last recovery check”
-- 30-day or 90-day confidence trend chart
-- Per-item recovery status
-- Recovery drill timeline
-- Downloadable markdown readiness report
+- Plain-language headline (for example, “All your backups are ready to restore”)
+- Ready count and time since the last restore test
+- **View backup history** expands 30/90-day charts, per-item status, practice recoveries, and report download
 
 A **weekly recovery summary** email is sent every Monday morning to enabled email targets. You can also send it manually from **Notifications**.
 
@@ -190,7 +197,7 @@ BackupProof supports:
 - **Weekly recovery summary** email (Mondays at 9:00, server local time)
 - Alerts for missed schedules, failed backups, failed recovery checks, stale proof, and storage problems
 - Audit logs
-- Role-based access control
+- Role-based access control with login UI, sessions, and a Profile page for password and user management
 - Backup safety checks before jobs run
 
 ## Quick Start
@@ -268,6 +275,27 @@ http://localhost:8787
 ```
 
 Set `FRD_DATA_DIR` and `FRD_ENCRYPTION_KEY` for persistent encrypted storage.
+
+### Environment file (`.env`)
+
+Copy the example file and edit it:
+
+```bash
+cp .env.example .env
+```
+
+BackupProof loads `.env` from the project root on startup. Values already set in the shell or in `docker-compose.yml` `environment:` take precedence.
+
+Example for local auth:
+
+```text
+FRD_AUTH_ENABLED=true
+FRD_ENCRYPTION_KEY=your-long-random-secret
+```
+
+After enabling auth, sign in with the default `admin` / `admin`, then open **Profile** to change the password and add other users.
+
+With Docker Compose, the same `.env` file is used automatically via `env_file`.
 
 ### Update An Existing Server
 
@@ -424,6 +452,8 @@ Useful API areas include:
 - Jobs
 - Recovery
 - Recovery analytics (`GET /api/analytics/recovery`)
+- Auth (`POST /api/auth/login`, `POST /api/auth/password`, `GET /api/auth/status`)
+- Users (`GET /api/users`, `POST /api/users`, `PATCH /api/users/:id`, `DELETE /api/users/:id`) — admin only
 - Portable import and export
 - Recovery kit import and export
 - Notifications (including test alerts and weekly summary)
@@ -434,9 +464,9 @@ Useful API areas include:
 
 | Path | Purpose |
 | ---- | ------- |
-| `src/` | React dashboard |
-| `server/` | Express API, jobs, backup engines, recovery workflows |
-| `shared/` | Shared types, schemas, readiness, and branding |
+| `src/` | React dashboard (`main.tsx`, `auth.tsx`, `profile.tsx`, `storageSetup.tsx`) |
+| `server/` | Express API, jobs, backup engines, recovery workflows, `.env` loading |
+| `shared/` | Shared types, schemas, validation, readiness, and branding |
 | `cli/` | Command-line interface |
 | `tests/` | Vitest unit and integration tests |
 | `agent/` | Early agent scripts for future remote workflows |
@@ -450,10 +480,10 @@ npm run build
 npm audit --omit=dev
 ```
 
-Current local status after the v12 release:
+Current local status after the v13 release:
 
-- 24 test files passing
-- 66 tests passing
+- 28 test files passing
+- 77 tests passing
 - 0 production dependency vulnerabilities
 
 ## Security Notes
@@ -486,15 +516,13 @@ BackupProof is not trying to be another low-level backup engine race.
 
 It is a friendly recovery dashboard that makes backup safety visible. The built-in engine is the default path, while Restic and Kopia remain optional migration and advanced-use integrations.
 
-V1 through v12 focus on a single-server self-hosted workflow. Kubernetes, remote agents, and multi-host orchestration are future directions.
+V1 through v13 focus on a single-server self-hosted workflow. Kubernetes, remote agents, and multi-host orchestration are future directions.
 
 ## Roadmap
 
 Planned areas:
 
 - Official Docker image on GHCR and one-command install packages
-- Login UI when auth is enabled
-- Immutable / tamper-resistant storage controls
 - Remote agents
 - Kubernetes support
 - Team workflows
