@@ -91,6 +91,11 @@ export function consumeGoogleDriveConnection(connectionId?: string) {
   return credentials;
 }
 
+export function peekGoogleDriveConnection(connectionId?: string) {
+  if (!connectionId) return undefined;
+  return connections.get(connectionId);
+}
+
 export async function googleDriveClient(credentialSecret?: string): Promise<GoogleDriveClient> {
   const google = await loadGoogleApis();
   if (!credentialSecret) throw new Error("Google Drive is not connected.");

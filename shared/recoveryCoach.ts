@@ -81,8 +81,8 @@ export function buildRecoveryCoach(state: DashboardState, summaries: AppSummary[
         ? "At least one vault is outside the local machine or mirrored elsewhere."
         : "Use SFTP, S3, B2, Google Drive, or another disk so one broken server is not the only copy.",
       status: hasOffsite ? "done" : "todo",
-      route: "protect",
-      actionLabel: hasOffsite ? "Review storage" : "Add storage"
+      route: "dashboard",
+      actionLabel: hasOffsite ? "Review storage" : "Add second copy"
     },
     {
       id: "alerts",

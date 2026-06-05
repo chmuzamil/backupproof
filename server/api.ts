@@ -6,15 +6,18 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { v4 as uuid } from "uuid";
+import { buildRecoveryReadinessReport } from "../shared/recoveryAnalytics";
 import {
   agentRegisterSchema,
   appInputSchema,
   drRunSchema,
   loginInputSchema,
   notificationInputSchema,
+  notificationTestInputSchema,
   policyInputSchema,
   repositoryInputSchema,
   restoreDestinationTemplateInputSchema,
+  secondaryStorageInputSchema,
   userInputSchema
 } from "../shared/schemas";
 import { deleteAllSnapshots, deleteApp } from "./appMaintenance";
@@ -32,6 +35,9 @@ import { getEngineAdapter } from "./engines";
 import { heartbeatAgent, registerAgent } from "./fleet";
 import { consumeGoogleDriveConnection, finishGoogleDriveOAuth, startGoogleDriveOAuth } from "./googleDrive";
 import { JobRunner } from "./jobs";
+import { createRepositoryFromInput } from "./repositoryCreate";
+import { testRepositoryConnection } from "./repositoryTest";
+import { sendTestNotification, sendTestNotificationConfig } from "./notifications";
 import { openApiSpec } from "./openapi";
 import { createPortableExport } from "./portableExport";
 import { restorePortableExport } from "./portableImport";
@@ -39,6 +45,8 @@ import { createRecoveryKit, openRecoveryKit } from "./recoveryKit";
 import { listDrReports, readDrReport } from "./proofReport";
 import { buildRecoveryRunbook, createEvidenceBundle } from "./recoveryEvidence";
 import { inspectRestorePreflight } from "./restorePreflight";
+import { getRecoveryAnalytics } from "./recoveryAnalytics";
+import { sendWeeklyRecoverySummaries } from "./weeklySummary";
 import { compareSnapshots, inspectSnapshotContents } from "./snapshotInspector";
 import { Store } from "./store";
 import type { AppSummary, FileBrowserEntry, FileBrowserResult, SnapshotSummary, User } from "../shared/types";
@@ -314,6 +322,39 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     res.json(summaries);
   });
 
+  router.get("/analytics/recovery", auth, async (req, res, next) => {
+    try {
+      const period = Number(req.query.period ?? 30);
+      const periodDays = period === 90 ? 90 : period === 7 ? 7 : 30;
+      res.json(await getRecoveryAnalytics(store, periodDays));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/analytics/recovery/report", auth, async (req, res, next) => {
+    try {
+      const period = Number(req.query.period ?? 30);
+      const periodDays = period === 90 ? 90 : period === 7 ? 7 : 30;
+      const analytics = await getRecoveryAnalytics(store, periodDays);
+      const body = buildRecoveryReadinessReport(analytics);
+      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="backupproof-recovery-report-${analytics.generatedAt.slice(0, 10)}.md"`);
+      res.send(body);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/analytics/recovery/weekly-summary", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      res.json(await sendWeeklyRecoverySummaries(store));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/discovery", auth, async (_req, res, next) => {
     try {
       res.json(await discoverHost());
@@ -360,29 +401,21 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.post("/repositories/test", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const input = repositoryInputSchema.parse(req.body);
+      res.json(await testRepositoryConnection(input));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/repositories", auth, async (req, res, next) => {
     try {
       if (req.user) requireRole(req.user.role, "write");
       const input = repositoryInputSchema.parse(req.body);
-      if (input.engine === "restic" || input.engine === "kopia") {
-        if (!input.password) throw new Error("Repository password is required for Restic and Kopia vaults");
-        await assertExternalEngine(input.engine);
-      }
-      if ((input.type === "s3" || input.type === "b2") && !input.credentials) {
-        throw new Error("Cloud vault credentials are required for S3 and B2");
-      }
-      const passwordSecretId = input.password ? await store.putSecret(input.password) : undefined;
-      const credentialSecretId = input.credentials ? await store.putSecret(input.credentials) : undefined;
-      const repository = await store.upsertRepository({
-        name: input.name,
-        engine: input.engine,
-        type: input.type,
-        location: input.location,
-        passwordSecretId,
-        credentialSecretId,
-        objectLock: input.objectLock,
-        bandwidthLimitKbps: input.bandwidthLimitKbps
-      });
+      const repository = await createRepositoryFromInput(store, input);
       await recordAudit(store, "repository.create", `Created vault ${repository.name} (${repository.engine})`, req.user);
       broadcast();
       res.status(201).json(repository);
@@ -442,6 +475,34 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
     }
   });
 
+  router.put("/apps/:id/secondary-storage", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const input = secondaryStorageInputSchema.parse(req.body);
+      const app = store.snapshot().apps.find((item) => item.id === req.params.id);
+      if (!app) throw new Error("App not found");
+
+      let secondaryId = input.existingRepositoryId;
+      if (input.repository) {
+        const repository = await createRepositoryFromInput(store, input.repository);
+        secondaryId = repository.id;
+      }
+      if (!secondaryId) throw new Error("Choose a storage location for the second copy.");
+      if (secondaryId === app.repositoryId) throw new Error("Choose a different place than the main backup storage.");
+
+      const secondaryRepositoryIds = [...new Set([...(app.secondaryRepositoryIds ?? []), secondaryId])];
+      const updated = await store.upsertApp({
+        ...app,
+        secondaryRepositoryIds
+      });
+      await recordAudit(store, "app.secondary-storage", `Added second copy storage for ${app.name}`, req.user);
+      broadcast();
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/notifications", auth, async (req, res, next) => {
     try {
       if (req.user) requireRole(req.user.role, "write");
@@ -455,6 +516,36 @@ export function createApi(store: Store, runner: JobRunner, broadcast: () => void
       });
       broadcast();
       res.status(201).json(target);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/notifications/test", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const input = notificationTestInputSchema.parse(req.body);
+      const delivered = await sendTestNotificationConfig(input.type, input.config);
+      if (!delivered) throw new Error("Test alert could not be delivered. Check the settings and try again.");
+      res.json({ ok: true, message: "Test alert sent." });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/notifications/:id/test", auth, async (req, res, next) => {
+    try {
+      if (req.user) requireRole(req.user.role, "write");
+      const target = store.snapshot().notificationTargets.find((item) => item.id === req.params.id);
+      if (!target) throw new Error("Notification target not found");
+      const delivered = await sendTestNotification(target, store.getSecret(target.configSecretId));
+      if (!delivered) throw new Error("Test alert could not be delivered.");
+      await store.upsertNotification({
+        ...target,
+        lastDeliveryAt: new Date().toISOString(),
+        lastDeliveryStatus: "succeeded"
+      });
+      res.json({ ok: true, message: "Test alert sent." });
     } catch (error) {
       next(error);
     }

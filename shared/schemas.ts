@@ -66,6 +66,18 @@ export const notificationInputSchema = z.object({
   config: z.record(z.string())
 });
 
+export const notificationTestInputSchema = z.object({
+  type: notificationInputSchema.shape.type,
+  config: z.record(z.string())
+});
+
+export const secondaryStorageInputSchema = z.object({
+  repository: repositoryInputSchema.optional(),
+  existingRepositoryId: z.string().optional()
+}).refine((value) => Boolean(value.repository || value.existingRepositoryId), {
+  message: "Choose an existing storage location or create a new one."
+});
+
 export const restoreDestinationTemplateInputSchema = z.object({
   name: z.string().min(1),
   path: z.string().min(1),

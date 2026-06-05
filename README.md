@@ -23,17 +23,18 @@ BackupProof is designed for both non-technical and technical self-hosters:
 
 ## Current Version
 
-**v11.0.0** focuses on a friendlier product experience:
+**v12.0.0** completes the “Can I actually get my data back?” promise with friendlier setup and recovery visibility:
 
-- Plain-language Dashboard, Protect Data, and Recovery pages
-- Recovery Coach score and checklist
-- Guided "what should I do next?" actions
-- Built-in backup engine as the default path
-- Google Drive, SFTP, S3, B2, and local storage support
-- Portable backup downloads and imports
-- Recovery kit for moving BackupProof to a new server
-- Recovery drills, reports, runbooks, and evidence bundles
-- CMS-aware discovery for WordPress, Drupal, Joomla, Ghost, and Nextcloud
+- **Non-technical storage setup** — presets for this computer, USB drive, Google Drive, SFTP, S3, and Backblaze B2
+- **Test storage before saving** — validate a location before the first backup runs
+- **Second copy wizard** — add offsite or mirrored storage during Protect Data or from the Dashboard coach
+- **Notification polish** — plain-language alert copy, type-specific forms, and send-test before save
+- **Recovery analytics** — 30/90-day confidence trends, drill timeline, and downloadable readiness reports
+- **Weekly recovery summary** — Monday email digest to enabled email targets
+- **First-run setup wizard** — welcome flow for protect → demo → alerts on a fresh install
+- **Recovery Coach deep-links** — “Turn on alerts” and “Add second copy” open the right setup flow
+
+v11 foundations still included: Recovery Coach, built-in engine, Google Drive/SFTP/S3/B2/local storage, portable backups, recovery kit, drills, runbooks, evidence bundles, and CMS discovery.
 
 ## Product Promise
 
@@ -63,7 +64,19 @@ The Recovery Coach turns backup safety into a simple checklist:
 - Turn on alerts
 - Save a safe restore location
 
-It gives a readiness score and one best next step so users are not left guessing.
+It gives a readiness score, one best next step, and deep-links into storage and alert setup so users are not left guessing.
+
+### Recovery Analytics
+
+The Dashboard shows lightweight recovery analytics when items are protected:
+
+- Average confidence and “days since last recovery check”
+- 30-day or 90-day confidence trend chart
+- Per-item recovery status
+- Recovery drill timeline
+- Downloadable markdown readiness report
+
+A **weekly recovery summary** email is sent every Monday morning to enabled email targets. You can also send it manually from **Notifications**.
 
 ### Protect Data Wizard
 
@@ -84,6 +97,9 @@ It supports:
 - MySQL and MariaDB databases
 - Guided folder discovery
 - A small file browser for choosing folders and files without typing paths
+- **Storage presets** with plain-language labels (this computer, USB, cloud, SFTP, S3, B2)
+- **Test connection** before saving storage
+- **Optional second copy** during setup
 - Advanced setup for technical users
 
 When BackupProof detects a CMS, it can fill in the full site folder and the database details it can safely read. It does not display database passwords discovered from config files or container environment variables.
@@ -169,6 +185,9 @@ BackupProof supports:
 - Email notifications
 - Webhook notifications
 - Slack, Discord, Telegram, and PagerDuty target types
+- **Send test alert** before saving or on existing targets
+- **Friendly alert templates** for backup and recovery events
+- **Weekly recovery summary** email (Mondays at 9:00, server local time)
 - Alerts for missed schedules, failed backups, failed recovery checks, stale proof, and storage problems
 - Audit logs
 - Role-based access control
@@ -250,6 +269,28 @@ http://localhost:8787
 
 Set `FRD_DATA_DIR` and `FRD_ENCRYPTION_KEY` for persistent encrypted storage.
 
+### Update An Existing Server
+
+After pulling a new release:
+
+```bash
+cd backupproof
+git pull
+npm install
+npm run build
+npm start
+```
+
+With Docker Compose:
+
+```bash
+cd backupproof
+git pull
+docker compose up -d --build
+```
+
+Keep `FRD_ENCRYPTION_KEY` unchanged across updates so stored credentials remain readable.
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -277,7 +318,8 @@ Open **Protect data** and choose what matters:
 - If a website or CMS is found, choose **Protect this website**.
 - Use **Browse folders** to click through the machine and add folders or files.
 - Use **Advanced setup** for app folders, Docker Compose projects, and databases.
-- Choose where backup copies should live.
+- Pick a **storage preset**, then use **Test connection** if needed.
+- Optionally enable **Save a second copy** for offsite protection.
 - Pick one simple recovery check.
 - Finish the wizard.
 
@@ -302,6 +344,8 @@ For stronger protection, add a second storage location such as:
 - S3-compatible storage
 - Backblaze B2
 - Google Drive
+
+Use **Add second copy** on the Dashboard (Recovery Coach or app card), or enable it during **Protect data** setup.
 
 ## Recovery Workflows
 
@@ -374,13 +418,15 @@ http://localhost:8787/api/docs/openapi.json
 Useful API areas include:
 
 - Apps
-- Repositories
+- Repositories (including `POST /api/repositories/test`)
+- Secondary storage (`PUT /api/apps/:id/secondary-storage`)
 - Policies
 - Jobs
 - Recovery
+- Recovery analytics (`GET /api/analytics/recovery`)
 - Portable import and export
 - Recovery kit import and export
-- Notifications
+- Notifications (including test alerts and weekly summary)
 - Alerts
 - Audit logs
 
@@ -404,10 +450,10 @@ npm run build
 npm audit --omit=dev
 ```
 
-Current local status after the v11 README update:
+Current local status after the v12 release:
 
-- 20 test files passing
-- 58 tests passing
+- 24 test files passing
+- 66 tests passing
 - 0 production dependency vulnerabilities
 
 ## Security Notes
@@ -440,20 +486,18 @@ BackupProof is not trying to be another low-level backup engine race.
 
 It is a friendly recovery dashboard that makes backup safety visible. The built-in engine is the default path, while Restic and Kopia remain optional migration and advanced-use integrations.
 
-V1 through v11 focus on a single-server self-hosted workflow. Kubernetes, remote agents, and multi-host orchestration are future directions.
+V1 through v12 focus on a single-server self-hosted workflow. Kubernetes, remote agents, and multi-host orchestration are future directions.
 
 ## Roadmap
 
 Planned areas:
 
-- Easier one-command install packages
-- More non-technical storage setup
-- Better notification templates
+- Official Docker image on GHCR and one-command install packages
+- Login UI when auth is enabled
+- Immutable / tamper-resistant storage controls
 - Remote agents
 - Kubernetes support
-- Immutable storage controls
 - Team workflows
-- Recovery analytics
 
 ## Contributing
 

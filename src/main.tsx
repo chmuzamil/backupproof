@@ -26,13 +26,22 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  TrendingUp,
   Upload,
   XCircle
 } from "lucide-react";
 import type { Alert, AppSummary, DashboardState, DiscoveredCmsApp, DiscoveredContainer, DiscoveredDatabase, DiscoveryResult, DrReportSummary, FileBrowserResult, Job, JobType, Policy, RestoreDestinationTemplate, RestorePreflight, RestoreProof, SnapshotComparison, SnapshotContents, SnapshotSummary } from "../shared/types";
 import { brand } from "../shared/brand";
+import { formatDaysSince, type RecoveryAnalytics } from "../shared/recoveryAnalytics";
 import { readinessAdvice, readinessCounts, type ReadinessState } from "../shared/readiness";
-import { buildRecoveryCoach, type CoachRoute, type RecoveryCoach } from "../shared/recoveryCoach";
+import { buildRecoveryCoach, type CoachRoute, type CoachTask, type RecoveryCoach } from "../shared/recoveryCoach";
+import {
+  SecondStorageModal,
+  StorageLocationForm,
+  buildStoragePayload,
+  createStorageFormState,
+  type StorageFormState
+} from "./storageSetup";
 import "./styles.css";
 
 const api = {
@@ -41,6 +50,9 @@ const api = {
   },
   async getSummaries(): Promise<AppSummary[]> {
     return fetch("/api/summaries").then((res) => res.json());
+  },
+  async getRecoveryAnalytics(period: 30 | 90 = 30): Promise<RecoveryAnalytics> {
+    return fetch(`/api/analytics/recovery?period=${period}`).then((res) => res.json());
   },
   async getSnapshots(appId: string): Promise<SnapshotSummary[]> {
     return fetch(`/api/apps/${appId}/snapshots`).then((res) => res.json());
@@ -214,11 +226,47 @@ function SidebarBrand() {
   );
 }
 
+const FIRST_RUN_KEY = "backupproof.firstRunDismissed";
+
 function App() {
   const [state, setState] = useState<DashboardState | null>(null);
   const [summaries, setSummaries] = useState<AppSummary[]>([]);
   const [active, setActive] = useState<"dashboard" | "protect" | "recovery" | "schedule" | "alerts" | "settings">("dashboard");
+  const [secondStorageAppId, setSecondStorageAppId] = useState<string | null>(null);
+  const [focusAlertsSetup, setFocusAlertsSetup] = useState(false);
+  const [showFirstRun, setShowFirstRun] = useState(false);
   const [error, setError] = useState<string>();
+
+  function handleCoachGoTo(route: CoachRoute, task?: CoachTask) {
+    if (task?.id === "offsite-copy") {
+      setActive("dashboard");
+      const candidate = state?.apps.find((app) => !(app.secondaryRepositoryIds?.length)) ?? state?.apps[0];
+      setSecondStorageAppId(candidate?.id ?? null);
+      return;
+    }
+    if (task?.id === "alerts") {
+      setFocusAlertsSetup(true);
+      setActive("settings");
+      return;
+    }
+    setActive(route);
+  }
+
+  function dismissFirstRun() {
+    window.localStorage.setItem(FIRST_RUN_KEY, "1");
+    setShowFirstRun(false);
+  }
+
+  function startFirstRunProtect() {
+    dismissFirstRun();
+    setActive("protect");
+  }
+
+  function startFirstRunAlerts() {
+    dismissFirstRun();
+    setFocusAlertsSetup(true);
+    setActive("settings");
+  }
 
   async function refresh() {
     try {
@@ -237,6 +285,16 @@ function App() {
     events.onmessage = () => void refresh();
     return () => events.close();
   }, []);
+
+  useEffect(() => {
+    if (summaries.length === 0 && !window.localStorage.getItem(FIRST_RUN_KEY)) {
+      setShowFirstRun(true);
+    }
+  }, [summaries.length]);
+
+  useEffect(() => {
+    if (active !== "settings") setFocusAlertsSetup(false);
+  }, [active]);
 
   const latestJobs = useMemo(() => state?.jobs.slice(0, 8) ?? [], [state]);
 
@@ -279,12 +337,25 @@ function App() {
         {state.environment.errors.length > 0 && <div className="banner warning">{state.environment.errors.join(" ")}</div>}
         {state.environment.warnings.length > 0 && <div className="banner info">{state.environment.warnings.join(" ")}</div>}
 
-        {active === "dashboard" && <Dashboard state={state} summaries={summaries} jobs={latestJobs} refresh={refresh} goTo={setActive} />}
+        {active === "dashboard" && <Dashboard state={state} summaries={summaries} jobs={latestJobs} refresh={refresh} goTo={handleCoachGoTo} onAddSecondCopy={setSecondStorageAppId} />}
         {active === "protect" && <ProtectData state={state} refresh={refresh} />}
-        {active === "recovery" && <Recovery state={state} summaries={summaries} refresh={refresh} goTo={setActive} />}
+        {active === "recovery" && <Recovery state={state} summaries={summaries} refresh={refresh} goTo={handleCoachGoTo} />}
         {active === "schedule" && <Schedule state={state} summaries={summaries} refresh={refresh} />}
         {active === "alerts" && <Alerts state={state} summaries={summaries} refresh={refresh} />}
-        {active === "settings" && <Notifications state={state} refresh={refresh} />}
+        {active === "settings" && <Notifications state={state} refresh={refresh} highlightSetup={focusAlertsSetup} />}
+        {secondStorageAppId && <SecondStorageModal state={state} appId={secondStorageAppId} onClose={() => setSecondStorageAppId(null)} refresh={refresh} />}
+        {showFirstRun && summaries.length === 0 && (
+          <FirstRunWizard
+            onProtect={startFirstRunProtect}
+            onAlerts={startFirstRunAlerts}
+            onDemo={async () => {
+              dismissFirstRun();
+              await api.post("/api/demo/run");
+              await refresh();
+            }}
+            onDismiss={dismissFirstRun}
+          />
+        )}
       </main>
     </div>
   );
@@ -316,13 +387,15 @@ function Dashboard({
   summaries,
   jobs,
   refresh,
-  goTo
+  goTo,
+  onAddSecondCopy
 }: {
   state: DashboardState;
   summaries: AppSummary[];
   jobs: Job[];
   refresh: () => Promise<void>;
-  goTo: (route: CoachRoute) => void;
+  goTo: (route: CoachRoute, task?: CoachTask) => void;
+  onAddSecondCopy: (appId: string) => void;
 }) {
   const [demoRunning, setDemoRunning] = useState(false);
   const [demoMessage, setDemoMessage] = useFlashMessage();
@@ -359,6 +432,7 @@ function Dashboard({
       <div className="apps">
         <RecoveryCoachPanel coach={buildRecoveryCoach(state, summaries)} goTo={goTo} />
         <ReadinessOverview counts={counts} summaries={orderedSummaries} refresh={refresh} />
+        {hasProtectedData && <RecoveryAnalyticsPanel />}
         {!hasProtectedData && <div className="demo-strip">
           <div>
             <strong>Try a safe demo</strong>
@@ -379,7 +453,9 @@ function Dashboard({
           <EmptyState />
         ) : (
           <div className="app-grid">
-            {visibleSummaries.map((summary) => <AppCard key={summary.app.id} summary={summary} refresh={refresh} />)}
+            {visibleSummaries.map((summary) => (
+              <AppCard key={summary.app.id} summary={summary} refresh={refresh} onAddSecondCopy={() => onAddSecondCopy(summary.app.id)} />
+            ))}
           </div>
         )}
       </div>
@@ -394,7 +470,7 @@ function RecoveryCoachPanel({
   compact = false
 }: {
   coach: RecoveryCoach;
-  goTo: (route: CoachRoute) => void;
+  goTo: (route: CoachRoute, task?: CoachTask) => void;
   compact?: boolean;
 }) {
   return (
@@ -417,7 +493,7 @@ function RecoveryCoachPanel({
             <strong>{coach.nextTask.title}</strong>
             <p>{coach.nextTask.description}</p>
           </div>
-          <button type="button" onClick={() => goTo(coach.nextTask!.route)}>{coach.nextTask.actionLabel}</button>
+          <button type="button" onClick={() => goTo(coach.nextTask!.route, coach.nextTask)}>{coach.nextTask.actionLabel}</button>
         </div>
       )}
       <div className="coach-checklist">
@@ -433,7 +509,7 @@ function RecoveryCoachPanel({
             </>
           );
           return isNextTask ? (
-            <button type="button" className={`coach-task ${task.status} actionable`} key={task.id} onClick={() => goTo(task.route)}>
+            <button type="button" className={`coach-task ${task.status} actionable`} key={task.id} onClick={() => goTo(task.route, task)}>
               {content}
             </button>
           ) : (
@@ -449,6 +525,180 @@ function RecoveryCoachPanel({
 
 function CircleIcon() {
   return <span className="circle-icon" aria-hidden="true" />;
+}
+
+function recentProofDate(summaries: AppSummary[]) {
+  const dates = summaries.map((summary) => summary.restoreProof?.testedAt).filter(Boolean) as string[];
+  if (dates.length === 0) return undefined;
+  return dates.sort((a, b) => b.localeCompare(a))[0];
+}
+
+function RecoveryAnalyticsPanel() {
+  const [period, setPeriod] = useState<30 | 90>(30);
+  const [analytics, setAnalytics] = useState<RecoveryAnalytics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useFlashMessage();
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    void api.getRecoveryAnalytics(period).then((data) => {
+      if (active) {
+        setAnalytics(data);
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [period]);
+
+  async function downloadReport() {
+    setMessage("");
+    try {
+      await api.download(`/api/analytics/recovery/report?period=${period}`);
+      setMessage("Recovery readiness report downloaded.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not download report");
+    }
+  }
+
+  const trendMax = Math.max(1, ...(analytics?.trend.filter((point) => point.hasData).map((point) => point.averageScore) ?? [1]));
+
+  return (
+    <section className="analytics-panel">
+      <div className="analytics-head">
+        <div>
+          <span className="eyebrow"><TrendingUp /> Recovery analytics</span>
+          <h2>How recovery confidence is trending</h2>
+          <p>Track recovery checks and drills over time so backup trust is not a one-time guess.</p>
+        </div>
+        <div className="analytics-actions">
+          <div className="filter-tabs" aria-label="Analytics period">
+            <button type="button" className={period === 30 ? "active" : ""} onClick={() => setPeriod(30)}>30 days</button>
+            <button type="button" className={period === 90 ? "active" : ""} onClick={() => setPeriod(90)}>90 days</button>
+          </div>
+          <button type="button" className="ghost-button" onClick={() => void downloadReport()}><Download /> Download report</button>
+        </div>
+      </div>
+      <FlashBanner message={message} onDismiss={() => setMessage("")} />
+      {loading && !analytics ? (
+        <p className="muted">Loading recovery analytics...</p>
+      ) : analytics && (
+        <>
+          <div className="analytics-stats">
+            <div><strong>{analytics.summary.averageConfidence}%</strong><span>Average confidence</span></div>
+            <div><strong>{analytics.summary.provenItems}/{analytics.summary.protectedItems}</strong><span>Ready to recover</span></div>
+            <div><strong>{analytics.summary.averageDaysSinceProof ?? "—"}</strong><span>Avg days since check</span></div>
+            <div><strong>{analytics.summary.drillCount}</strong><span>Recovery drills</span></div>
+          </div>
+          <div className="analytics-trend-wrap">
+            <div className="analytics-trend" aria-label="Average recovery confidence by day">
+              {analytics.trend.map((point) => (
+                <div className="analytics-bar-wrap" key={point.date} title={`${point.date}: ${point.hasData ? `${point.averageScore}% confidence` : "No checks"}`}>
+                  <div
+                    className={`analytics-bar ${point.hasData ? "has-data" : ""}`}
+                    style={{ height: point.hasData ? `${Math.max(8, (point.averageScore / trendMax) * 100)}%` : "6px" }}
+                  />
+                  <span className="analytics-bar-label">{point.date.slice(5)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="analytics-grid">
+            <div className="analytics-list">
+              <h3>Protected items</h3>
+              {analytics.apps.length === 0 ? (
+                <p className="muted">No protected items yet.</p>
+              ) : analytics.apps.map((app) => (
+                <div className="analytics-row" key={app.appId}>
+                  <strong>{app.appName}</strong>
+                  <span>{app.confidenceScore}% confidence</span>
+                  <span>Last check {formatDaysSince(app.lastProofAt)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="analytics-list">
+              <h3>Recovery drill timeline</h3>
+              {analytics.drills.length === 0 ? (
+                <p className="muted">No recovery drills in this period yet. Run one from the Recovery page.</p>
+              ) : analytics.drills.slice(0, 8).map((drill) => (
+                <div className="analytics-row" key={`${drill.appId}-${drill.id}`}>
+                  <strong>{drill.appName}</strong>
+                  <span>{drill.scenario.replace(/-/g, " ")} · {time(drill.restoredAt)}</span>
+                  <span>Proof {drill.proofStatus} · {drill.confidenceScore}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function FirstRunWizard({
+  onProtect,
+  onAlerts,
+  onDemo,
+  onDismiss
+}: {
+  onProtect: () => void;
+  onAlerts: () => void;
+  onDemo: () => Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [demoRunning, setDemoRunning] = useState(false);
+
+  async function runDemo() {
+    setDemoRunning(true);
+    try {
+      await onDemo();
+    } finally {
+      setDemoRunning(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop first-run-backdrop" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
+      <div className="modal first-run-modal">
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow"><Sparkles /> Quick setup</span>
+            <h2 id="first-run-title">Welcome to BackupProof</h2>
+            <p>Three calm steps to go from zero to a backup you can actually restore.</p>
+          </div>
+          <button type="button" className="modal-close" onClick={onDismiss} aria-label="Close"><XCircle /></button>
+        </div>
+        <ol className="first-run-steps">
+          <li>
+            <ShieldCheck />
+            <div>
+              <strong>Protect something important</strong>
+              <p>Choose photos, documents, app data, or a website folder.</p>
+              <button type="button" className="primary" onClick={onProtect}>Start protect wizard</button>
+            </div>
+          </li>
+          <li>
+            <Play />
+            <div>
+              <strong>Save and check the first backup</strong>
+              <p>Try the safe demo if you want to watch the full flow first.</p>
+              <button type="button" onClick={() => void runDemo()} disabled={demoRunning}>{demoRunning ? "Starting demo..." : "Run safe demo"}</button>
+            </div>
+          </li>
+          <li>
+            <Bell />
+            <div>
+              <strong>Turn on alerts</strong>
+              <p>Get a plain-language email when a backup or recovery check needs attention.</p>
+              <button type="button" onClick={onAlerts}>Set up alerts</button>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+  );
 }
 
 function ReadinessOverview({
@@ -482,6 +732,12 @@ function ReadinessOverview({
           <span className="eyebrow"><Activity /> Recovery readiness</span>
           <h2>{counts.total === 0 ? "Protect your first app" : counts.attention === 0 ? "Your data is ready to recover" : `${counts.attention} item${counts.attention === 1 ? "" : "s"} need help`}</h2>
           <p>{counts.total === 0 ? "Choose important files or apps and make the first checked backup." : counts.attention === 0 ? "Every protected app has been restored and checked recently." : "Start with the item that needs the most attention."}</p>
+          {counts.total > 0 && (
+            <p className="recovery-age-callout">
+              Last recovery check: <strong>{formatDaysSince(recentProofDate(summaries))}</strong>
+              {counts.proven < counts.total ? ` · ${counts.total - counts.proven} item${counts.total - counts.proven === 1 ? "" : "s"} still need a fresh check` : ""}
+            </p>
+          )}
         </div>
         {next && advice && (
           <div className={`next-action ${advice.state}`}>
@@ -512,7 +768,7 @@ function EmptyState() {
   );
 }
 
-function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Promise<void> }) {
+function AppCard({ summary, refresh, onAddSecondCopy }: { summary: AppSummary; refresh: () => Promise<void>; onAddSecondCopy: () => void }) {
   const [message, setMessage] = useFlashMessage();
   const advice = readinessAdvice(summary);
   const protectedSize = bytes(summary.safety.estimatedSourceBytes);
@@ -601,6 +857,9 @@ function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Pro
       <SnapshotTrend history={summary.snapshotHistory} />
       <div className="snapshot-line">Latest backup point: {summary.latestSnapshot?.id ?? "None yet"}</div>
       <div className="snapshot-line">Backup storage: {summary.repository?.name ?? "Not configured"} · {summary.app.recipeType}</div>
+      {(summary.app.secondaryRepositoryIds ?? []).length > 0 && (
+        <div className="snapshot-line">Second copy: {(summary.app.secondaryRepositoryIds ?? []).length} extra location{(summary.app.secondaryRepositoryIds ?? []).length === 1 ? "" : "s"}</div>
+      )}
       <div className="checks">
         {summary.app.healthChecks.length === 0 ? <span>No recovery checks configured</span> : summary.app.healthChecks.map((check) => <span key={check.id}>{check.type}: {check.target}</span>)}
       </div>
@@ -624,6 +883,7 @@ function AppCard({ summary, refresh }: { summary: AppSummary; refresh: () => Pro
             {primaryAction.type !== "restore-test" && <button onClick={() => run("restore-test")}><RotateCcw /> Check recovery</button>}
             {primaryAction.type !== "manual-restore" && <button onClick={() => run("manual-restore")}><LifeBuoy /> Recover files</button>}
             <button onClick={downloadLatest} disabled={!summary.latestSnapshot}><Download /> Download a copy</button>
+            <button onClick={onAddSecondCopy}><Cloud /> Add second copy</button>
             <button onClick={() => run("prune")}><Scissors /> Clean old backups</button>
           </div>
         </details>
@@ -889,6 +1149,15 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
   const [googleConnectionId, setGoogleConnectionId] = useState("");
   const [googleRedirectUri, setGoogleRedirectUri] = useState(() => `${window.location.origin}/api/google-drive/oauth/callback`);
   const [googleConnecting, setGoogleConnecting] = useState(false);
+  const [primaryForm, setPrimaryForm] = useState(() => createStorageFormState({
+    repoName: "My safety vault",
+    repoLocation: ".data/vaults/default"
+  }));
+  const [enableSecondCopy, setEnableSecondCopy] = useState(false);
+  const [secondForm, setSecondForm] = useState(() => createStorageFormState({
+    repoName: "Second copy",
+    repoLocation: ".data/vaults/secondary"
+  }));
 
   const [healthType, setHealthType] = useState<"file" | "http">("file");
   const [healthTarget, setHealthTarget] = useState("");
@@ -980,7 +1249,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
       applySelectedPaths(recommended);
       setAppName((current) => current || result.defaultAppName);
       if (!vaultPrefilled) {
-        setRepoLocation(result.defaultVaultPath);
+        setPrimaryForm((current) => ({ ...current, repoLocation: result.defaultVaultPath }));
         setVaultPrefilled(true);
       }
     } catch (err) {
@@ -1094,16 +1363,22 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
       }
     }
     if (step === 1) {
-      if (!repoName.trim()) return "Name this backup storage.";
-      if (!repoLocation.trim()) return "Choose where backup copies should be stored.";
-      if ((engine === "restic" || engine === "kopia") && repoPassword.length < 8) {
+      if (!primaryForm.repoName.trim()) return "Name this backup storage.";
+      if (!primaryForm.repoLocation.trim()) return "Choose where backup copies should be stored.";
+      if ((engine === "restic" || engine === "kopia") && primaryForm.repoPassword.length < 8) {
         return "This storage engine needs a password of at least 8 characters.";
       }
-      if (repoType === "sftp" && (!sftpHost.trim() || !sftpUsername.trim())) return "Add the server address and username.";
-      if ((repoType === "s3" || repoType === "b2") && (!s3AccessKey.trim() || !s3SecretKey.trim())) {
+      if (primaryForm.repoType === "sftp" && (!primaryForm.credentials.host?.trim() || !primaryForm.credentials.username?.trim())) {
+        return "Add the server address and username.";
+      }
+      if ((primaryForm.repoType === "s3" || primaryForm.repoType === "b2") && (!primaryForm.credentials.accessKey?.trim() || !primaryForm.credentials.secretKey?.trim())) {
         return "Add the cloud access key and secret key.";
       }
-      if (repoType === "google-drive" && !googleConnectionId) return "Connect Google Drive before continuing.";
+      if (primaryForm.repoType === "google-drive" && !primaryForm.googleConnectionId) return "Connect Google Drive before continuing.";
+      if (enableSecondCopy) {
+        if (!secondForm.repoName.trim() || !secondForm.repoLocation.trim()) return "Finish the second copy storage details.";
+        if (secondForm.repoType === "google-drive" && !secondForm.googleConnectionId) return "Connect Google Drive for the second copy.";
+      }
     }
     if (step === 2 && !healthTarget.trim()) {
       return "Choose one simple thing BackupProof should check after recovery.";
@@ -1130,25 +1405,12 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
     setSaving(true);
     setMessage("");
     try {
-      const repo = await api.post("/api/repositories", {
-        name: repoName.trim(),
-        engine,
-        type: repoType,
-        location: repoLocation.trim(),
-        password: repoPassword || undefined,
-        credentials: repoType === "sftp" ? {
-          host: sftpHost.trim(),
-          port: sftpPort || "22",
-          username: sftpUsername.trim(),
-          password: sftpPassword || undefined
-        } : repoType === "s3" || repoType === "b2" ? {
-          accessKey: s3AccessKey.trim(),
-          secretKey: s3SecretKey.trim(),
-          region: s3Region.trim() || undefined,
-          endpoint: s3Endpoint.trim() || undefined
-        } : undefined,
-        googleConnectionId: repoType === "google-drive" ? googleConnectionId : undefined
-      });
+      const repo = await api.post("/api/repositories", buildStoragePayload(primaryForm, engine));
+      const secondaryRepositoryIds: string[] = [];
+      if (enableSecondCopy) {
+        const secondRepo = await api.post("/api/repositories", buildStoragePayload(secondForm, engine));
+        secondaryRepositoryIds.push(secondRepo.id);
+      }
 
       await api.post("/api/apps", {
         name: appName.trim(),
@@ -1169,6 +1431,7 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
         } : undefined,
         healthChecks: [{ type: healthType, target: healthTarget.trim(), expected: healthExpected.trim() || undefined }],
         repositoryId: repo.id,
+        secondaryRepositoryIds,
         policyId: defaultPolicy.id
       });
 
@@ -1190,8 +1453,11 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
     }
     setMessage("");
     if (step === 0) autoHealthTarget();
-    if (step === 1 && repoType === "local" && !vaultPrefilled) {
-      setRepoLocation(`.data/vaults/${appName.trim().toLowerCase().replace(/\s+/g, "-") || "default"}`);
+    if (step === 1 && !vaultPrefilled) {
+      setPrimaryForm((current) => ({
+        ...current,
+        repoLocation: `.data/vaults/${appName.trim().toLowerCase().replace(/\s+/g, "-") || "default"}`
+      }));
     }
     setStep((s) => Math.min(s + 1, PROTECT_STEPS.length - 1));
   }
@@ -1540,13 +1806,13 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
       {step === 1 && (
         <div className="wizard-panel">
           <h3>Where should backup copies live?</h3>
-          <p className="wizard-lead">Start with a local folder or attached drive. Add cloud or another server when you want protection from a broken machine.</p>
+          <p className="wizard-lead">Pick a friendly storage type, test the connection, and optionally add a second place right away.</p>
 
           <div className="protect-tip">
             <ShieldCheck />
             <div>
               <strong>Simple recommendation</strong>
-              <span>Use built-in backups and store copies outside the folder you are protecting. A second place, like Google Drive or another server, is even safer.</span>
+              <span>Keep the main copy on this computer, then add Google Drive, another server, or an attached drive as backup #2.</span>
             </div>
           </div>
 
@@ -1575,81 +1841,29 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
             </div>
           </div>
 
-          <WizardField label="Storage name" hint="A friendly label shown on the dashboard">
-            <input value={repoName} onChange={(e) => setRepoName(e.target.value)} />
-          </WizardField>
-
-          <div className="wizard-field full">
-            <span className="wizard-label">Where should copies go?</span>
-            <div className="choice-row">
-              {([
-                ["local", HardDrive, "This computer / drive"],
-                ["sftp", Server, "Another server"],
-                ["s3", Cloud, "S3 cloud storage"],
-                ["b2", Cloud, "Backblaze B2"],
-                ["google-drive", Cloud, "Google Drive"]
-              ] as const).map(([value, Icon, title]) => (
-                <button
-                  type="button"
-                  key={value}
-                  className={`choice-chip ${repoType === value ? "selected" : ""}`}
-                  onClick={() => setRepoType(value)}
-                >
-                  <Icon /> {title}
-                </button>
-              ))}
-            </div>
+          <div className="wizard-subpanel">
+            <h4>Main backup storage</h4>
+            <StorageLocationForm state={primaryForm} setState={setPrimaryForm} engine={engine} onMessage={setMessage} />
           </div>
 
-          <WizardField label="Folder or storage location" hint={locationHint} full>
-            <input value={repoLocation} onChange={(e) => setRepoLocation(e.target.value)} />
-          </WizardField>
-
-          <WizardField
-            label="Backup password"
-            hint={engine === "frd" ? "Recommended. It encrypts your backup copies." : "Required. Use at least 8 characters."}
-          >
-            <input type="password" value={repoPassword} onChange={(e) => setRepoPassword(e.target.value)} placeholder="Choose a strong passphrase" />
-          </WizardField>
-
-          {repoType === "sftp" && (
-            <div className="wizard-subpanel">
-              <h4>Other server connection</h4>
-              <div className="form-grid">
-                <WizardField label="Host"><input value={sftpHost} onChange={(e) => setSftpHost(e.target.value)} /></WizardField>
-                <WizardField label="Port"><input value={sftpPort} onChange={(e) => setSftpPort(e.target.value)} /></WizardField>
-                <WizardField label="Username"><input value={sftpUsername} onChange={(e) => setSftpUsername(e.target.value)} /></WizardField>
-                <WizardField label="Password"><input type="password" value={sftpPassword} onChange={(e) => setSftpPassword(e.target.value)} /></WizardField>
-              </div>
-            </div>
-          )}
-
-          {(repoType === "s3" || repoType === "b2") && (
-            <div className="wizard-subpanel">
-              <h4>Cloud sign-in details</h4>
-              <div className="form-grid">
-                <WizardField label="Access key"><input value={s3AccessKey} onChange={(e) => setS3AccessKey(e.target.value)} /></WizardField>
-                <WizardField label="Secret key"><input type="password" value={s3SecretKey} onChange={(e) => setS3SecretKey(e.target.value)} /></WizardField>
-                <WizardField label="Region" hint="e.g. us-east-1"><input value={s3Region} onChange={(e) => setS3Region(e.target.value)} /></WizardField>
-                <WizardField label="Endpoint" hint="Required for B2 / MinIO"><input value={s3Endpoint} onChange={(e) => setS3Endpoint(e.target.value)} placeholder="https://s3.us-west-000.backblazeb2.com" /></WizardField>
-              </div>
-            </div>
-          )}
-
-          {repoType === "google-drive" && (
-            <div className="wizard-subpanel">
-              <h4>Google Drive connection</h4>
-              <p className="muted">Connect a Google Drive folder. Advanced setup may require a Google Cloud OAuth client.</p>
-              <div className="form-grid">
-                <WizardField label="OAuth client ID"><input value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} /></WizardField>
-                <WizardField label="OAuth client secret"><input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} /></WizardField>
-              </div>
-              {googleRedirectUri && <div className="oauth-redirect"><span>Authorized redirect URL</span><code>{googleRedirectUri}</code></div>}
-              <button type="button" className={googleConnectionId ? "google-connect connected" : "google-connect"} onClick={connectGoogleDrive} disabled={googleConnecting}>
-                <Cloud /> {googleConnectionId ? "Google Drive connected" : googleConnecting ? "Waiting for Google..." : "Connect Google Drive"}
-              </button>
-            </div>
-          )}
+          <div className="wizard-subpanel second-copy-panel">
+            <label className="second-copy-toggle">
+              <input type="checkbox" checked={enableSecondCopy} onChange={(e) => setEnableSecondCopy(e.target.checked)} />
+              <span>
+                <strong>Also save a second copy somewhere else</strong>
+                <small>Recommended once the first backup works. Future backups will write to both places.</small>
+              </span>
+            </label>
+            {enableSecondCopy && (
+              <StorageLocationForm
+                state={secondForm}
+                setState={setSecondForm}
+                engine={engine}
+                showPresets
+                onMessage={setMessage}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -1706,7 +1920,8 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
             <div><span>Data type</span><strong>{friendlyRecipeName(recipeType)}</strong></div>
             <div><span>Protecting</span><strong>{parsePaths(backupPaths).length} item{parsePaths(backupPaths).length === 1 ? "" : "s"}</strong></div>
             <div><span>Backup method</span><strong>{engine === "frd" ? "Built-in backups" : engine.toUpperCase()}</strong></div>
-            <div><span>Copies stored in</span><strong>{friendlyStorageName(repoType)}</strong></div>
+            <div><span>Copies stored in</span><strong>{friendlyStorageName(primaryForm.repoType)}</strong></div>
+            {enableSecondCopy && <div><span>Second copy</span><strong>{friendlyStorageName(secondForm.repoType)}</strong></div>}
             <div><span>Recovery check</span><strong>{healthType === "file" ? "File or folder exists" : "App page opens"}</strong></div>
           </div>
 
@@ -1716,8 +1931,9 @@ function ProtectData({ state, refresh }: { state: DashboardState; refresh: () =>
             <div><dt>Backup type</dt><dd>{recipeType}</dd></div>
             <div><dt>Paths</dt><dd>{parsePaths(backupPaths).join(", ") || "—"}</dd></div>
             <div><dt>Engine</dt><dd>{engine.toUpperCase()}</dd></div>
-            <div><dt>Vault</dt><dd>{repoName} ({repoType})</dd></div>
-            <div><dt>Location</dt><dd>{repoLocation}</dd></div>
+            <div><dt>Vault</dt><dd>{primaryForm.repoName} ({primaryForm.repoType})</dd></div>
+            <div><dt>Location</dt><dd>{primaryForm.repoLocation}</dd></div>
+            {enableSecondCopy && <div><dt>Second copy</dt><dd>{secondForm.repoName} ({secondForm.repoType})</dd></div>}
             <div><dt>Restore proof</dt><dd>{healthType}: {healthTarget || "—"}</dd></div>
             <div><dt>Schedule</dt><dd>{defaultPolicy.name}</dd></div>
           </dl>
@@ -1760,7 +1976,7 @@ function Recovery({
   state: DashboardState;
   summaries: AppSummary[];
   refresh: () => Promise<void>;
-  goTo: (route: CoachRoute) => void;
+  goTo: (route: CoachRoute, task?: CoachTask) => void;
 }) {
   const [selectedAppId, setSelectedAppId] = useState("");
   const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
@@ -2423,35 +2639,78 @@ function Alerts({ state, summaries, refresh }: { state: DashboardState; summarie
   );
 }
 
-function Notifications({ state, refresh }: { state: DashboardState; refresh: () => Promise<void> }) {
+function Notifications({ state, refresh, highlightSetup = false }: { state: DashboardState; refresh: () => Promise<void>; highlightSetup?: boolean }) {
   const [message, setMessage] = useFlashMessage();
   const [migrateMessage, setMigrateMessage] = useFlashMessage();
+  const [alertType, setAlertType] = useState<"email" | "webhook" | "slack" | "discord" | "telegram" | "pagerduty">("email");
+  const [testing, setTesting] = useState(false);
+  const [weeklySending, setWeeklySending] = useState(false);
+  const formRef = React.useRef<HTMLFormElement>(null);
   const resticOk = state.environment.resticAvailable ?? false;
   const kopiaOk = state.environment.kopiaAvailable ?? false;
+
+  useEffect(() => {
+    if (!highlightSetup) return;
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [highlightSetup]);
+
+  function buildConfig(form: FormData) {
+    if (alertType === "webhook" || alertType === "slack" || alertType === "discord") {
+      return { url: String(form.get("url")) };
+    }
+    if (alertType === "telegram") {
+      return { token: String(form.get("token")), chatId: String(form.get("chatId")) };
+    }
+    if (alertType === "pagerduty") {
+      return { routingKey: String(form.get("routingKey")) };
+    }
+    return {
+      host: String(form.get("host")),
+      port: String(form.get("port")),
+      from: String(form.get("from")),
+      to: String(form.get("to")),
+      user: String(form.get("user")),
+      pass: String(form.get("pass"))
+    };
+  }
+
+  async function testDraft(form: FormData) {
+    setTesting(true);
+    setMessage("");
+    try {
+      await api.post("/api/notifications/test", { type: alertType, config: buildConfig(form) });
+      setMessage("Test alert sent. Check your inbox or channel.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not send test alert");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function testSaved(targetId: string) {
+    setTesting(true);
+    setMessage("");
+    try {
+      await api.post(`/api/notifications/${targetId}/test`);
+      await refresh();
+      setMessage("Test alert sent using the saved target.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not send test alert");
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function submit(form: FormData) {
     try {
       await api.post("/api/notifications", {
         name: String(form.get("name")),
-        type: form.get("type"),
+        type: alertType,
         enabled: true,
-        config: form.get("type") === "webhook" || form.get("type") === "slack" || form.get("type") === "discord"
-          ? { url: String(form.get("url")) }
-          : form.get("type") === "telegram"
-            ? { token: String(form.get("token")), chatId: String(form.get("chatId")) }
-            : form.get("type") === "pagerduty"
-              ? { routingKey: String(form.get("routingKey")) }
-              : {
-              host: String(form.get("host")),
-              port: String(form.get("port")),
-              from: String(form.get("from")),
-              to: String(form.get("to")),
-              user: String(form.get("user")),
-              pass: String(form.get("pass"))
-            }
+        config: buildConfig(form)
       });
       await refresh();
-      setMessage("Notification target saved.");
+      setMessage("Alerts turned on. BackupProof will tell you when something needs attention.");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not save notification target");
     }
@@ -2479,34 +2738,100 @@ function Notifications({ state, refresh }: { state: DashboardState; refresh: () 
     }
   }
 
+  async function sendWeeklySummaryNow() {
+    setWeeklySending(true);
+    setMessage("");
+    try {
+      const result = await api.post("/api/analytics/recovery/weekly-summary");
+      if (result.skipped === "no-email-targets") {
+        setMessage("Add an email alert target first, then try again.");
+      } else if (result.sent > 0) {
+        setMessage(`Weekly summary sent to ${result.sent} email target${result.sent === 1 ? "" : "s"}.`);
+      } else {
+        setMessage("Weekly summary was not sent. It may have already gone out this week.");
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not send weekly summary");
+    } finally {
+      setWeeklySending(false);
+    }
+  }
+
   return (
     <section className="schedule-layout">
-      <form className="wizard compact" action={(form) => void submit(form)}>
-        <WizardSection icon={<Bell />} title="Alert target">
-          <input name="name" placeholder="Target name" required />
-          <select name="type" defaultValue="webhook">
-            <option value="webhook">Webhook</option>
-            <option value="email">Email</option>
-            <option value="slack">Slack</option>
-            <option value="discord">Discord</option>
-            <option value="telegram">Telegram</option>
-            <option value="pagerduty">PagerDuty</option>
-          </select>
-          <input name="url" placeholder="Webhook / Slack / Discord URL" />
-          <input name="token" placeholder="Telegram bot token" />
-          <input name="chatId" placeholder="Telegram chat id" />
-          <input name="routingKey" placeholder="PagerDuty routing key" />
-          <input name="host" placeholder="SMTP host" />
-          <input name="port" placeholder="SMTP port" />
-          <input name="from" placeholder="From email" />
-          <input name="to" placeholder="To email" />
-          <input name="user" placeholder="SMTP user" />
-          <input name="pass" type="password" placeholder="SMTP password" />
+      {highlightSetup && (
+        <div className="banner info notification-coach-banner">
+          Recovery coach sent you here. Add one email or chat alert so silent backup failures do not stay hidden.
+        </div>
+      )}
+      <form ref={formRef} className={`wizard compact notification-form ${highlightSetup ? "highlighted" : ""}`} action={(form) => void submit(form)}>
+        <WizardSection icon={<Bell />} title="Turn on alerts">
+          <p className="muted notification-intro">Get a plain-language message when a backup fails, a recovery check goes stale, or storage stops responding.</p>
+          <input name="name" placeholder="Alert name, e.g. Email me" required />
+          <label className="wizard-field full">
+            <span className="wizard-label">How should BackupProof reach you?</span>
+            <select value={alertType} onChange={(e) => setAlertType(e.target.value as typeof alertType)}>
+              <option value="email">Email</option>
+              <option value="slack">Slack</option>
+              <option value="discord">Discord</option>
+              <option value="telegram">Telegram</option>
+              <option value="webhook">Webhook</option>
+              <option value="pagerduty">PagerDuty</option>
+            </select>
+          </label>
+          {(alertType === "webhook" || alertType === "slack" || alertType === "discord") && (
+            <input name="url" placeholder={alertType === "slack" ? "Slack incoming webhook URL" : alertType === "discord" ? "Discord webhook URL" : "Webhook URL"} required />
+          )}
+          {alertType === "telegram" && (
+            <>
+              <input name="token" placeholder="Telegram bot token" required />
+              <input name="chatId" placeholder="Telegram chat id" required />
+            </>
+          )}
+          {alertType === "pagerduty" && <input name="routingKey" placeholder="PagerDuty routing key" required />}
+          {alertType === "email" && (
+            <>
+              <input name="host" placeholder="SMTP host" required />
+              <input name="port" placeholder="SMTP port (587)" required />
+              <input name="from" placeholder="From email" required />
+              <input name="to" placeholder="Send alerts to" required />
+              <input name="user" placeholder="SMTP username" />
+              <input name="pass" type="password" placeholder="SMTP password" />
+            </>
+          )}
         </WizardSection>
-        <button className="primary"><Bell /> Save alerts</button>
+        <div className="notification-actions">
+          <button type="button" onClick={(event) => {
+            event.preventDefault();
+            const form = (event.currentTarget.closest("form") as HTMLFormElement | null);
+            if (form) void testDraft(new FormData(form));
+          }} disabled={testing}><Bell /> {testing ? "Sending test..." : "Send test alert"}</button>
+          <button className="primary"><Bell /> Save alerts</button>
+        </div>
         <FlashBanner message={message} onDismiss={() => setMessage("")} />
       </form>
       <aside className="schedule-side">
+        <h2>What you will be told about</h2>
+        <div className="schedule-app"><strong>Backup saved</strong><span>When scheduled backups finish successfully.</span></div>
+        <div className="schedule-app"><strong>Recovery check failed</strong><span>When BackupProof cannot prove a backup works.</span></div>
+        <div className="schedule-app"><strong>Storage problem</strong><span>When backup storage cannot be reached.</span></div>
+        <div className="schedule-app"><strong>Missed schedule</strong><span>When a backup or check does not run on time.</span></div>
+        <h2>Weekly recovery summary</h2>
+        <p className="muted">Every Monday morning, BackupProof emails a plain-language recovery summary to enabled email targets.</p>
+        <button type="button" className="ghost-button" onClick={() => void sendWeeklySummaryNow()} disabled={weeklySending}>
+          <Bell /> {weeklySending ? "Sending..." : "Send weekly summary now"}
+        </button>
+        <h2>Delivery targets</h2>
+        {state.notificationTargets.length === 0 ? (
+          <p className="muted">No alert targets yet.</p>
+        ) : state.notificationTargets.map((target) => (
+          <div className="schedule-app" key={target.id}>
+            <strong>{target.name}</strong>
+            <span>{target.type} · {target.enabled ? "enabled" : "disabled"}</span>
+            <span>Last delivery: {target.lastDeliveryAt ? `${target.lastDeliveryStatus ?? "unknown"} at ${time(target.lastDeliveryAt)}` : "never"}</span>
+            <button type="button" className="ghost-button" onClick={() => void testSaved(target.id)} disabled={testing}>Send test</button>
+          </div>
+        ))}
         <h2>External Engines</h2>
         <div className="schedule-app">
           <strong>{brand.engineLabel}</strong>
@@ -2579,16 +2904,6 @@ function Notifications({ state, refresh }: { state: DashboardState; refresh: () 
             ))}
           </>
         )}
-        <h2>Delivery Targets</h2>
-        {state.notificationTargets.length === 0 ? (
-          <p className="muted">No notification targets yet.</p>
-        ) : state.notificationTargets.map((target) => (
-          <div className="schedule-app" key={target.id}>
-            <strong>{target.name}</strong>
-            <span>{target.type} · {target.enabled ? "enabled" : "disabled"}</span>
-            <span>Last delivery: {target.lastDeliveryAt ? `${target.lastDeliveryStatus ?? "unknown"} at ${time(target.lastDeliveryAt)}` : "never"}</span>
-          </div>
-        ))}
       </aside>
     </section>
   );
